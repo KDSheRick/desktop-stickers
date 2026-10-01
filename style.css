@@ -1,0 +1,152 @@
+/* ==========================================================================
+   系统贴纸 · 毛玻璃主题 (GTK4 CSS)
+   深色 / 浅色两套配色；卡片半透明，配合 Blur my Shell 的窗口模糊，
+   即可透出被高斯模糊的桌面背景，呈现真正的毛玻璃质感。
+
+   想整体放大/缩小：改这里的字号和内边距，以及 widgets.py 里的
+   CARD_WIDTH / RING_SIZE / SPARK_HEIGHT。
+   ========================================================================== */
+
+/* 窗口本体完全透明：卡片之外直接透出桌面 */
+window {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* ---------------------------------------------------------------- 通用 */
+
+.card {
+  border-radius: 16px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+}
+
+.card-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.clock-time {
+  font-size: 28px;
+  font-weight: 300;
+  letter-spacing: 1px;
+  font-feature-settings: "tnum" 1;
+}
+
+.clock-date {
+  font-size: 10.5px;
+  letter-spacing: 0.8px;
+}
+
+.muted {
+  font-size: 10px;
+  min-height: 12px;
+}
+
+.value {
+  font-size: 13px;
+  font-weight: 700;
+  font-feature-settings: "tnum" 1;
+}
+
+.ring-value {
+  font-size: 14px;
+  font-weight: 700;
+  font-feature-settings: "tnum" 1;
+}
+
+.net-line {
+  font-size: 12px;
+  font-weight: 600;
+  font-feature-settings: "tnum" 1;
+}
+
+.music-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.music-sub {
+  font-size: 11px;
+}
+
+.row-label {
+  font-size: 10px;
+}
+
+.row-value {
+  font-size: 10px;
+  font-weight: 600;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ---------------------------------------------------------------- 深色玻璃 */
+
+.dark .card {
+  background-color: rgba(22, 24, 32, 0.55);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 3px 9px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.dark .card-title { color: rgba(255, 255, 255, 0.52); }
+.dark .clock-date { color: rgba(255, 255, 255, 0.62); }
+.dark .muted      { color: rgba(255, 255, 255, 0.50); }
+.dark .music-sub  { color: rgba(255, 255, 255, 0.62); }
+.dark .row-label  { color: rgba(255, 255, 255, 0.55); }
+.dark .row-value  { color: rgba(255, 255, 255, 0.92); }
+
+/* ---------------------------------------------------------------- 浅色玻璃 */
+
+.light .card {
+  background-color: rgba(255, 255, 255, 0.68);
+  border-color: rgba(255, 255, 255, 0.80);
+  box-shadow: 0 3px 9px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+  color: rgba(16, 17, 24, 0.92);
+}
+
+.light .card-title { color: rgba(16, 17, 24, 0.50); }
+.light .clock-date { color: rgba(16, 17, 24, 0.60); }
+.light .muted      { color: rgba(16, 17, 24, 0.50); }
+.light .music-sub  { color: rgba(16, 17, 24, 0.60); }
+.light .row-label  { color: rgba(16, 17, 24, 0.55); }
+.light .row-value  { color: rgba(16, 17, 24, 0.90); }
+
+/* ---------------------------------------------------------------- 常用文件 / 播放按钮 */
+
+.file-row {
+  border-radius: 7px;
+  padding: 1px 5px;
+}
+
+.play-button {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 18px;
+  box-shadow: none;
+}
+
+.skip-button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  box-shadow: none;
+  background: none;
+}
+
+.dark .file-row:hover    { background-color: rgba(255, 255, 255, 0.08); }
+.dark .play-button       { background-color: rgba(255, 255, 255, 0.10); }
+.dark .play-button:hover { background-color: rgba(255, 255, 255, 0.20); }
+.dark .play-button:disabled { background-color: rgba(255, 255, 255, 0.05); }
+.dark .skip-button:hover { background-color: rgba(255, 255, 255, 0.12); }
+
+.light .file-row:hover   { background-color: rgba(16, 17, 24, 0.07); }
+.light .play-button      { background-color: rgba(16, 17, 24, 0.08); }
+.light .play-button:hover { background-color: rgba(16, 17, 24, 0.16); }
+.light .play-button:disabled { background-color: rgba(16, 17, 24, 0.04); }
+.light .skip-button:hover { background-color: rgba(16, 17, 24, 0.10); }

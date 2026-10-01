@@ -1,0 +1,7 @@
+{
+  "uuid": "lyrics-panel@loong",
+  "name": "歌词顶栏 (Lyrics Panel)",
+  "description": "播放音乐时在顶栏显示当前歌词（MPRIS + 网易云歌词，lrclib 兜底），自动跟随进度。",
+  "shell-version": ["50"],
+  "version": 1
+}

@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""桌面系统信息贴纸：无边框毛玻璃卡片，实时显示系统状态。
+
+运行：  python3 main.py
+
+结构：  每张卡片是一张独立的贴纸（独立窗口）：
+        时钟；处理器 / 内存；磁盘 / 网络；电池 / 系统
+        默认排布在屏幕左上角（时钟横跨两列，其余两列成对）。
+
+交互：  按住任意贴纸拖动即可移动它；右键菜单：复位全部贴纸 / 切换深浅玻璃 / 退出。
+定位：  每张贴纸的位置会被单独记住（~/.config/sysstickers/position.json），
+        下次启动自动恢复；「复位全部贴纸」可一键排回左上角。
+
+说明：  GNOME 的 Wayland 协议不允许应用自己移动窗口，因此本程序默认通过
+        XWayland（X11 后端）运行以支持定位。若想强制原生 Wayland：
+        STICKERS_BACKEND=wayland python3 main.py （此时退化为单窗面板）
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+# ---- 后端选择：默认 XWayland（这样才能把窗口放到指定位置）----
+# 想强制原生 Wayland：启动前设置 STICKERS_BACKEND=wayland（位置记忆将不可用）
+from positioner import x11_available
+
+_stickers_backend = os.environ.get("STICKERS_BACKEND", "").lower()
+if _stickers_backend in ("x11", "wayland"):
+    os.environ["GDK_BACKEND"] = _stickers_backend
+elif os.environ.get("DISPLAY") and x11_available():
+    os.environ["GDK_BACKEND"] = "x11"
+
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+
+from collectors import SystemStats, fmt_bytes, fmt_uptime  # noqa: E402
+from lyrics_tray import CONTROL_NAME  # noqa: E402
+from positioner import (  # noqa: E402
+    X11Mover,
+    clamp_position,
+    load_saved_positions,
+    save_saved_positions,
+    xid_of,
+)
+from widgets import (  # noqa: E402
+    BLUE,
+    CARD_WIDTH,
+    PURPLE,
+    TEAL,
+    BatteryCard,
+    BarCard,
+    ClockCard,
+    MusicCard,
+    NetCard,
+    ProcessCard,
+    RecentFilesCard,
+    RingCard,
+    SystemCard,
+    ThermalCard,
+)
+
+APP_ID = "com.loong.SysStickers"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSS_FILE = os.path.join(BASE_DIR, "style.css")
+REFRESH_INTERVAL_MS = 1000
+
+# ---- 排布参数（逻辑像素）----
+CARD_GAP = 24       # 卡片与卡片之间的间距（横向纵向一致）
+WINDOW_MARGIN = 9   # 每个窗口内部留给阴影的空白
+WINDOW_GAP = CARD_GAP - 2 * WINDOW_MARGIN   # 窗口之间的间距（卡片间距减去两侧留白）
+MARGIN_X = 18       # 整组贴纸距屏幕左边
+MARGIN_TOP = 46     # 距屏幕顶部（避开 GNOME 顶栏）
+CLOCK_WIDTH = CARD_WIDTH * 2 + CARD_GAP     # 时钟卡片横跨两列
+
+# 两列成对排布的顺序（温度/风扇归到左侧，和电池一行）
+PAIRS = (("cpu", "mem"), ("disk", "net"), ("battery", "thermal"))
+
+# 左列里横跨两列的宽卡
+WIDE_LEFT = ("sys",)
+
+# 右上角一列（整体加宽，与宽卡同宽）：音乐 / 常用文件 / 进程
+RIGHT_COLUMN = ("music", "files", "proc")
+
+# 圆角说明：卡片倒角在 style.css（.card 的 border-radius，逻辑像素），
+# 为了让 blur-my-shell 的背景模糊圆角与卡片一致，其 corner-radius 也设为同值。
+
+
+def compute_layout(heights: dict) -> dict:
+    """计算默认排布：时钟一行，其余两列成对，锚定左上角。
+
+    注意：这里的高度是「窗口高度」（卡片 + 上下留白），
+    列间距按卡片间距 CARD_GAP 计算，保证窗口之间不重叠。
+    """
+    positions = {}
+    y = MARGIN_TOP
+    positions["clock"] = (MARGIN_X, y)
+    y += heights.get("clock", 80) + WINDOW_GAP
+    for left, right in PAIRS:
+        if left in heights and right in heights:
+            positions[left] = (MARGIN_X, y)
+            positions[right] = (MARGIN_X + CARD_WIDTH + CARD_GAP, y)
+            y += max(heights[left], heights[right]) + WINDOW_GAP
+        elif left in heights:
+            positions[left] = (MARGIN_X, y)
+            y += heights[left] + WINDOW_GAP
+        elif right in heights:
+            positions[right] = (MARGIN_X, y)
+            y += heights[right] + WINDOW_GAP
+    for sticker_id in WIDE_LEFT:
+        if sticker_id in heights:
+            positions[sticker_id] = (MARGIN_X, y)
+            y += heights[sticker_id] + WINDOW_GAP
+    return positions
+
+
+def make_sticker_box(card: Gtk.Widget, margin: int = WINDOW_MARGIN) -> Gtk.Box:
+    """给卡片套一层带边距的容器（边距用于显示阴影）。"""
+    root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    root.add_css_class("dark")  # 默认深色玻璃，可右键切换
+    root.set_margin_top(margin)
+    root.set_margin_bottom(margin)
+    root.set_margin_start(margin)
+    root.set_margin_end(margin)
+    root.append(card)
+    return root
+
+
+def attach_menu(window: Gtk.Window, root_box: Gtk.Widget) -> None:
+    """右键菜单：复位 / 主题 / 退出（动作注册在应用上，所有贴纸共用）。"""
+    menu = Gio.Menu()
+    menu.append("复位全部贴纸", "app.reset-stickers")
+    menu.append("切换深浅玻璃", "app.toggle-theme")
+    menu.append("顶栏歌词", "app.toggle-lyrics")
+    menu.append("退出", "app.quit")
+
+    popover = Gtk.PopoverMenu.new_from_model(menu)
+    popover.set_parent(root_box)
+    window._popover = popover  # noqa: SLF001 (保持引用)
+
+    def on_pressed(_gesture, _n_press, x, y):
+        rect = Gdk.Rectangle()
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        popover.set_pointing_to(rect)
+        popover.popup()
+
+    click = Gtk.GestureClick()
+    click.set_button(3)  # 右键
+    click.connect("pressed", on_pressed)
+    root_box.add_controller(click)
+
+
+def apply_x11_hints(window: Gtk.Window) -> None:
+    """X11 提示：让贴纸不出现在任务栏 / 工作区切换器里。"""
+    surface = window.get_surface()
+    if surface is None:
+        return
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            if hasattr(surface, "set_skip_taskbar_hint"):
+                surface.set_skip_taskbar_hint(True)
+            if hasattr(surface, "set_skip_pager_hint"):
+                surface.set_skip_pager_hint(True)
+    except Exception:
+        pass
+
+
+class StickerWindow(Gtk.ApplicationWindow):
+    """单张贴纸窗口：一张卡片 + 可拖动 + 右键菜单。"""
+
+    def __init__(self, app: Gtk.Application, sticker_id: str, card: Gtk.Widget):
+        super().__init__(application=app, title=f"系统贴纸 · {sticker_id}")
+        self.sticker_id = sticker_id
+        self.set_decorated(False)
+        self.set_resizable(False)
+
+        self.root_box = make_sticker_box(card)
+        attach_menu(self, self.root_box)
+
+        handle = Gtk.WindowHandle()  # 按住任意位置即可拖动
+        handle.set_child(self.root_box)
+        self.set_child(handle)
+
+        self.connect("map", lambda *_a: apply_x11_hints(self))
+
+
+class PanelWindow(Gtk.ApplicationWindow):
+    """纯 Wayland 兜底：无法逐张贴纸定位时，退化为单窗多卡片面板。"""
+
+    def __init__(self, app: Gtk.Application, cards: dict):
+        super().__init__(application=app, title="系统贴纸")
+        self.set_decorated(False)
+        self.set_resizable(False)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.add_css_class("dark")
+        root.set_margin_top(14)
+        root.set_margin_bottom(14)
+        root.set_margin_start(14)
+        root.set_margin_end(14)
+        self.root_box = root
+
+        grid = Gtk.Grid(column_spacing=8, row_spacing=8)
+        root.append(grid)
+        grid.attach(cards["clock"], 0, 0, 2, 1)
+        grid.attach(cards["cpu"], 0, 1, 1, 1)
+        grid.attach(cards["mem"], 1, 1, 1, 1)
+        grid.attach(cards["disk"], 0, 2, 1, 1)
+        grid.attach(cards["net"], 1, 2, 1, 1)
+        if "battery" in cards:
+            grid.attach(cards["battery"], 0, 3, 1, 1)
+            grid.attach(cards["thermal"], 1, 3, 1, 1)
+        else:
+            grid.attach(cards["thermal"], 0, 3, 1, 1)
+        grid.attach(cards["sys"], 0, 4, 2, 1)
+        for row, sticker_id in enumerate(RIGHT_COLUMN):
+            if sticker_id in cards:
+                grid.attach(cards[sticker_id], 2, row, 1, 1)
+
+        attach_menu(self, root)
+
+        handle = Gtk.WindowHandle()
+        handle.set_child(root)
+        self.set_child(handle)
+
+
+class StickerApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        self.stats = SystemStats()
+        self.mover = X11Mover()
+        self.cards: dict[str, Gtk.Widget] = {}
+        self.windows: dict[str, StickerWindow] = {}
+        self.panel_window: PanelWindow | None = None
+
+        self._saved = load_saved_positions()
+        self._last_seen: dict[str, tuple[int, int, int]] = {}
+        self._targets: dict[str, tuple[int, int]] = {}
+        self._moving = False
+        self._position_ready = False
+        self._mapped_count = 0
+        self._arrange_retries = 0
+        self._place_attempts = 0
+        self._stable_rounds = 0
+
+        self._install_actions()
+
+    # ------------------------------------------------------------ 启动
+
+    def do_activate(self) -> None:
+        if self.windows or self.panel_window is not None:
+            if self.panel_window is not None:
+                self.panel_window.present()
+            for window in self.windows.values():
+                window.present()
+            return
+
+        self._create_cards()
+        self._load_css()
+        if self.mover.ok:
+            self._create_sticker_windows()
+        else:
+            # 无 X11：单窗面板，窗口位置由桌面环境决定
+            self.panel_window = PanelWindow(self, self.cards)
+            self.panel_window.present()
+
+        self._refresh_cards()
+        GLib.timeout_add(REFRESH_INTERVAL_MS, self._on_tick)
+
+    def _load_css(self) -> None:
+        """把 style.css 加载到整个显示器（所有贴纸共用）。
+
+        优先级要比 GTK 的「用户样式」（~/.config/gtk-4.0/gtk.css，USER=800）更高：
+        否则第三方主题里针对 window / .card / button 这些通用名称的规则会覆盖贴纸样式。
+        """
+        provider = Gtk.CssProvider()
+        try:
+            provider.load_from_file(Gio.File.new_for_path(CSS_FILE))  # GTK >= 4.12
+        except AttributeError:  # pragma: no cover
+            provider.load_from_path(CSS_FILE)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_USER + 1,
+        )
+
+    def _create_cards(self) -> None:
+        self.cards = {
+            "clock": ClockCard(),
+            "cpu": RingCard("处理器", BLUE),
+            "mem": RingCard("内存", PURPLE),
+            "disk": BarCard("磁盘 /", TEAL),
+            "net": NetCard(),
+            "sys": SystemCard(),
+            "music": MusicCard(),
+            "thermal": ThermalCard(),
+            "files": RecentFilesCard(),
+            "proc": ProcessCard(),
+        }
+        if self.stats.has_battery:
+            self.cards["battery"] = BatteryCard()
+        self.cards["clock"].set_size_request(CLOCK_WIDTH, -1)
+
+    def _create_sticker_windows(self) -> None:
+        for sticker_id, card in self.cards.items():
+            window = StickerWindow(self, sticker_id, card)
+            window.set_opacity(0.0)  # 排布完成前先隐藏，避免看到窗口跳动
+            window.connect("map", self._on_window_mapped)
+            self.windows[sticker_id] = window
+        for window in self.windows.values():
+            window.present()
+
+    def _on_window_mapped(self, _window) -> None:
+        self._mapped_count += 1
+        if self._mapped_count == len(self.windows):
+            self._arrange_retries = 0
+            GLib.timeout_add(150, self._try_arrange)
+
+    # ------------------------------------------------------------ 排布与定位
+
+    def _try_arrange(self) -> bool:
+        self._arrange_retries += 1
+        ready = all(
+            window.get_height() > 1 and window.get_width() > 1
+            for window in self.windows.values()
+        )
+        if not ready and self._arrange_retries < 15:
+            return GLib.SOURCE_CONTINUE
+        self._arrange(use_saved=True)
+        return GLib.SOURCE_REMOVE
+
+    def _arrange(self, use_saved: bool) -> None:
+        """计算目标位置并开始移动（成对贴纸高度对齐，看起来更整齐）。"""
+        scale = max((w.get_scale_factor() for w in self.windows.values()), default=1)
+        heights = {sid: w.get_height() for sid, w in self.windows.items()}
+
+        # 同一行的两张贴纸取较高者，把矮的垫到同高
+        # 说明：size_request 的高度是「含边框/内边距」的卡片总高，
+        #       而窗口高度 = 卡片总高 + 上下各一个 WINDOW_MARGIN。
+        final_heights = dict(heights)
+        for left, right in PAIRS:
+            if left in heights and right in heights:
+                target = max(heights[left], heights[right])
+                final_heights[left] = final_heights[right] = target
+                card_height = target - 2 * WINDOW_MARGIN
+                for sid in (left, right):
+                    card = self.cards[sid]
+                    req_w, _ = card.get_size_request()
+                    card.set_size_request(req_w if req_w > 0 else CARD_WIDTH, card_height)
+
+        layout = compute_layout(final_heights)
+        screen_w, screen_h = self.mover.screen_size()
+        right_anchors = self._right_anchors(final_heights, scale, screen_w)
+
+        if os.environ.get("STICKERS_DEBUG"):
+            for sid, window in self.windows.items():
+                card = self.cards[sid]
+                print(f"[debug] {sid}: win={window.get_width()}x{window.get_height()} "
+                      f"card={card.get_width()}x{card.get_height()} "
+                      f"req={card.get_size_request()} "
+                      f"measure={card.measure(Gtk.Orientation.HORIZONTAL, -1)[:2]}/{card.measure(Gtk.Orientation.VERTICAL, -1)[:2]} "
+                      f"heights(before)={heights[sid]} final={final_heights[sid]} "
+                      f"layout={layout.get(sid)} scale={scale}")
+
+        targets = {}
+        for sid, window in self.windows.items():
+            device_w = max(int(window.get_width() * scale), 1)
+            device_h = max(int(window.get_height() * scale), 1)
+            saved = self._saved.get(sid)
+            # 宽度不一致（卡片改版/换缩放）时旧坐标作废，回到默认排布
+            if use_saved and saved is not None and abs(saved[2] - device_w) <= 4:
+                x, y = clamp_position(saved[0], saved[1], screen_w, screen_h, device_w, device_h)
+            elif sid in right_anchors:
+                x, y = right_anchors[sid]
+            else:
+                lx, ly = layout.get(sid, (MARGIN_X, MARGIN_TOP))
+                x, y = int(round(lx * scale)), int(round(ly * scale))
+            targets[sid] = (x, y)
+
+        self._targets = targets
+        self._moving = True
+        self._place_attempts = 0
+        self._stable_rounds = 0
+        GLib.timeout_add(150, self._place_step)
+
+    def _right_anchors(self, heights: dict, scale: int, screen_w: int) -> dict:
+        """右上角一列的目标坐标（设备像素）；仅用于没有位置记忆的贴纸。"""
+        anchors = {}
+        y = MARGIN_TOP
+        for sid in RIGHT_COLUMN:
+            window = self.windows.get(sid)
+            if window is None or sid not in heights:
+                continue
+            device_w = max(int(window.get_width() * scale), 1)
+            x = screen_w - device_w - int(round(MARGIN_X * scale))
+            anchors[sid] = (x, int(round(y * scale)))
+            y += heights[sid] + WINDOW_GAP
+        return anchors
+
+    def _place_step(self) -> bool:
+        """把每张贴纸移到目标位置；连续两轮稳定后显示出来。"""
+        if not self._moving:
+            return GLib.SOURCE_REMOVE
+        self._place_attempts += 1
+        all_stable = True
+        for sid, window in self.windows.items():
+            target = self._targets.get(sid)
+            xid = xid_of(window)
+            if not xid or target is None:
+                all_stable = False
+                continue
+            geometry = self.mover.geometry(xid)
+            if geometry is None:
+                all_stable = False
+                continue
+            if abs(geometry[0] - target[0]) > 2 or abs(geometry[1] - target[1]) > 2:
+                self.mover.move(xid, *target)
+                all_stable = False
+        self._stable_rounds = self._stable_rounds + 1 if all_stable else 0
+        if self._stable_rounds >= 2 or self._place_attempts >= 15:
+            self._finish_movement()
+            return GLib.SOURCE_REMOVE
+        return GLib.SOURCE_CONTINUE
+
+    def _finish_movement(self) -> None:
+        self._moving = False
+        self._position_ready = True
+        if os.environ.get("STICKERS_DEBUG"):
+            for sid, window in self.windows.items():
+                card = self.cards[sid]
+                print(f"[debug] final {sid}: win={window.get_width()}x{window.get_height()} "
+                      f"card={card.get_width()}x{card.get_height()}")
+        for window in self.windows.values():
+            window.set_opacity(1.0)
+
+    def _track_positions(self) -> None:
+        """每秒跟踪：拖动停下后，逐张贴纸记住位置。"""
+        if not self._position_ready or not self.mover.ok:
+            return
+        changed = False
+        for sid, window in self.windows.items():
+            xid = xid_of(window)
+            geometry = self.mover.geometry(xid) if xid else None
+            if geometry is None:
+                continue
+            position = (geometry[0], geometry[1], geometry[2])
+            if position == self._last_seen.get(sid) and position != self._saved.get(sid):
+                self._saved[sid] = position
+                changed = True
+            self._last_seen[sid] = position
+        if changed:
+            save_saved_positions(self._saved)
+
+    # ------------------------------------------------------------ 动作
+
+    def _install_actions(self) -> None:
+        toggle = Gio.SimpleAction.new("toggle-theme", None)
+        toggle.connect("activate", self._on_toggle_theme)
+        self.add_action(toggle)
+
+        reset = Gio.SimpleAction.new("reset-stickers", None)
+        reset.connect("activate", self._on_reset)
+        self.add_action(reset)
+
+        # 顶栏歌词插件开关（勾选状态跟随插件进程）
+        self._lyrics_action = Gio.SimpleAction.new_stateful(
+            "toggle-lyrics", None, GLib.Variant("b", False))
+        self._lyrics_action.connect("activate", self._on_toggle_lyrics)
+        self.add_action(self._lyrics_action)
+        Gio.bus_watch_name(
+            Gio.BusType.SESSION, CONTROL_NAME, Gio.BusNameWatcherFlags.NONE,
+            self._on_lyrics_appeared, self._on_lyrics_vanished)
+
+    def _on_lyrics_appeared(self, _conn, _name, _owner) -> None:
+        self._lyrics_action.set_state(GLib.Variant("b", True))
+
+    def _on_lyrics_vanished(self, _conn, _name) -> None:
+        self._lyrics_action.set_state(GLib.Variant("b", False))
+
+    def _on_toggle_lyrics(self, _action, _param) -> None:
+        """在当前进程外切换顶栏歌词插件（独立进程、状态会被记住）。"""
+        script = os.path.join(BASE_DIR, "lyrics_tray.py")
+        subprocess.Popen(
+            [sys.executable, script, "--toggle"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+
+    def _root_boxes(self) -> list[Gtk.Box]:
+        roots = [window.root_box for window in self.windows.values()]
+        if self.panel_window is not None:
+            roots.append(self.panel_window.root_box)
+        return roots
+
+    def _on_toggle_theme(self, *_args) -> None:
+        for root in self._root_boxes():
+            if root.has_css_class("dark"):
+                root.remove_css_class("dark")
+                root.add_css_class("light")
+            else:
+                root.remove_css_class("light")
+                root.add_css_class("dark")
+
+    def _on_reset(self, *_args) -> None:
+        """清空记忆，把全部贴纸排回左上角。"""
+        self._saved = {}
+        save_saved_positions({})
+        self._last_seen = {}
+        if not self.mover.ok or not self.windows:
+            return
+        self._arrange(use_saved=False)
+
+    # ------------------------------------------------------------ 数据刷新
+
+    def _on_tick(self) -> bool:
+        self._refresh_cards()
+        self._track_positions()
+        return GLib.SOURCE_CONTINUE
+
+    def _refresh_cards(self) -> None:
+        data = self.stats.sample()
+        self.cards["clock"].refresh()
+
+        # CPU：圆环 + 温度 / 频率
+        cpu = data["cpu"]
+        parts = []
+        if data["cpu_temp"] is not None:
+            parts.append(f"{data['cpu_temp']:.0f} °C")
+        if data["cpu_freq"]:
+            parts.append(f"{data['cpu_freq'] / 1000:.2f} GHz")
+        if not parts:
+            parts.append(f"{self.stats.cpu_cores} 线程")
+        self.cards["cpu"].refresh(cpu, f"{cpu:.0f}%", " · ".join(parts))
+
+        # 内存：圆环 + 已用/总量 + 交换分区
+        mem = data["mem"]
+        swap = data["swap"]
+        if swap["total"]:
+            mem_sub = f"交换 {fmt_bytes(swap['used'])} / {fmt_bytes(swap['total'])}"
+        else:
+            mem_sub = "无交换分区"
+        self.cards["mem"].refresh(
+            mem["percent"],
+            f"{fmt_bytes(mem['used'])} / {fmt_bytes(mem['total'])}",
+            mem_sub,
+        )
+
+        # 磁盘
+        disk = data["disk"]
+        self.cards["disk"].refresh(
+            disk["percent"],
+            f"{fmt_bytes(disk['used'])} / {fmt_bytes(disk['total'])}",
+            f"可用 {fmt_bytes(disk['free'])}",
+        )
+
+        # 网络
+        self.cards["net"].refresh(data["net"]["down"], data["net"]["up"])
+
+        # 电池
+        if "battery" in self.cards and data["battery"] is not None:
+            self.cards["battery"].refresh_battery(data["battery"])
+
+        # 系统信息
+        load1, load5, load15 = data["load"]
+        self.cards["sys"].refresh(
+            {
+                "主机": self.stats.hostname,
+                "系统": self.stats.os_name,
+                "内核": self.stats.kernel,
+                "运行": fmt_uptime(data["uptime"]),
+                "负载": f"{load1:.2f} · {load5:.2f} · {load15:.2f}",
+            }
+        )
+
+        # 音乐：MPRIS 当前播放（没有播放器时显示空闲态）
+        self.cards["music"].refresh(data.get("music"))
+
+        # 温度 / 风扇
+        self.cards["thermal"].refresh_thermal(data.get("cpu_temp"), data.get("fan"))
+
+        # 进程 Top 3
+        self.cards["proc"].refresh(data.get("proc", []))
+
+        # 常用文件（最近经常打开；内部有缓存，列表变了才重建）
+        self.cards["files"].refresh()
+
+
+def main() -> int:
+    GLib.set_application_name("系统贴纸")
+    GLib.set_prgname("sysstickers")
+    return StickerApp().run(sys.argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
