@@ -380,6 +380,7 @@ class RingCard(Card):
         self.sub_label.add_css_class("muted")
         self.sub_label.set_halign(Gtk.Align.CENTER)
         self.sub_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.sub_label.set_max_width_chars(18)
 
         self.append(self._overlay)
         self.append(self.sub_label)
@@ -433,6 +434,9 @@ class ThermalCard(RingCard):
         self.refresh(min(max(temp_c, 0.0), 100.0), f"{temp_c:.0f}°",
                      self._fan_text(fan_rpm), color=temp_color(temp_c))
 
+    def resize(self, width: int) -> None:
+        super().resize(width)
+
     @staticmethod
     def _fan_text(fan_rpm: float | None) -> str:
         if fan_rpm is None:
@@ -457,11 +461,14 @@ class BarCard(Card):
         self.value_label = Gtk.Label(label="")
         self.value_label.add_css_class("value")
         self.value_label.set_halign(Gtk.Align.START)
+        self.value_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.value_label.set_max_width_chars(18)
 
         self.sub_label = Gtk.Label(label=" ")
         self.sub_label.add_css_class("muted")
         self.sub_label.set_halign(Gtk.Align.START)
         self.sub_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.sub_label.set_max_width_chars(20)
 
         self.append(self.bar)
         self.append(self.value_label)
@@ -816,9 +823,13 @@ class NetCard(Card):
         self.down_label = Gtk.Label(label=" ")
         self.down_label.add_css_class("net-line")
         self.down_label.set_halign(Gtk.Align.START)
+        self.down_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.down_label.set_max_width_chars(16)
         self.up_label = Gtk.Label(label=" ")
         self.up_label.add_css_class("net-line")
         self.up_label.set_halign(Gtk.Align.START)
+        self.up_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.up_label.set_max_width_chars(16)
 
         self.spark = Gauge(int(self._spark_width), SPARK_HEIGHT)
         self.spark.set_margin_top(2)
@@ -828,6 +839,12 @@ class NetCard(Card):
         self.append(self.down_label)
         self.append(self.up_label)
         self.append(self.spark)
+
+    def resize(self, width: int) -> None:
+        super().resize(width)
+        self._spark_width = max(40.0, float(width) - 26.0)
+        self.spark.set_size_request(int(self._spark_width), SPARK_HEIGHT)
+        self.spark.queue_draw()
 
     def refresh(self, down_rate: float, up_rate: float) -> None:
         from collectors import fmt_speed
@@ -892,7 +909,7 @@ class SystemCard(Card):
         super().__init__("系统", GREY, width=width)
         self._values: dict[str, Gtk.Label] = {}
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         row.set_homogeneous(True)
         for keys in self._COLUMNS:
             grid = Gtk.Grid(column_spacing=9, row_spacing=6)
@@ -905,6 +922,7 @@ class SystemCard(Card):
                 value.set_halign(Gtk.Align.END)
                 value.set_hexpand(True)
                 value.set_ellipsize(Pango.EllipsizeMode.END)
+                value.set_max_width_chars(14)
                 grid.attach(label, 0, line, 1, 1)
                 grid.attach(value, 1, line, 1, 1)
                 self._values[key] = value
