@@ -12,13 +12,11 @@ STICKERS_AUTOSTART="$AUTOSTART_DIR/sysstickers.desktop"
 STICKERS_APP="$APPS_DIR/sysstickers.desktop"
 LYRICS_AUTOSTART="$AUTOSTART_DIR/sysstickers-lyrics.desktop"
 LYRICS_APP="$APPS_DIR/sysstickers-lyrics.desktop"
-ISLAND_AUTOSTART="$AUTOSTART_DIR/sysstickers-island.desktop"
-ISLAND_APP="$APPS_DIR/sysstickers-island.desktop"
 CONTROL_APP="$APPS_DIR/sysstickers-control.desktop"
 
 if [[ "${1:-}" == "--remove" ]]; then
     rm -f "$STICKERS_AUTOSTART" "$STICKERS_APP" "$LYRICS_AUTOSTART" "$LYRICS_APP" \
-          "$ISLAND_AUTOSTART" "$ISLAND_APP" "$CONTROL_APP"
+          "$CONTROL_APP"
     command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" || true
     echo "已移除开机自启和快捷方式。"
     exit 0
@@ -80,45 +78,9 @@ StartupNotify=false
 EOF
 }
 
-# 灵动岛开机自启（沿用上次的开关状态）
-write_island_autostart() {
-    cat > "$ISLAND_AUTOSTART" <<EOF
-[Desktop Entry]
-Type=Application
-Version=1.0
-Name=灵动岛
-Name[en]=Dynamic Island
-Comment=顶部灵动岛胶囊（沿用上次的开关状态）
-Exec=$PYTHON $DIR/island.py --autostart
-Path=$DIR
-Icon=video-display
-Terminal=false
-StartupNotify=false
-X-GNOME-Autostart-Delay=8
-EOF
-}
-
-# 应用菜单里的「灵动岛」开关：点击一下开/关切换
-write_island_launcher() {
-    cat > "$ISLAND_APP" <<EOF
-[Desktop Entry]
-Type=Application
-Version=1.0
-Name=灵动岛 开/关
-Name[en]=Toggle Dynamic Island
-Comment=打开或关闭桌面灵动岛（也可以在任意贴纸右键菜单里切换）
-Exec=$PYTHON $DIR/island.py --toggle
-Path=$DIR
-Icon=video-display
-Terminal=false
-StartupNotify=false
-EOF
-}
-
 # 开机自启（延迟几秒，等桌面就绪）
 write_desktop_file "$STICKERS_AUTOSTART" 5
 write_lyrics_autostart
-write_island_autostart
 
 # 应用菜单里的「贴纸设置」控制器
 write_control_launcher() {
@@ -140,7 +102,6 @@ EOF
 # 应用菜单快捷方式
 write_desktop_file "$STICKERS_APP" ""
 write_lyrics_launcher
-write_island_launcher
 write_control_launcher
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" || true
@@ -148,6 +109,5 @@ command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_
 echo "完成："
 echo "  贴纸自启  -> $STICKERS_AUTOSTART"
 echo "  歌词自启  -> $LYRICS_AUTOSTART（沿用上次开关状态）"
-echo "  灵动岛自启 -> $ISLAND_AUTOSTART（沿用上次开关状态）"
-echo "  应用菜单  -> $STICKERS_APP / $LYRICS_APP / $ISLAND_APP / $CONTROL_APP（贴纸设置）"
+echo "  应用菜单  -> $STICKERS_APP / $LYRICS_APP / $CONTROL_APP（贴纸设置）"
 echo "立即体验：python3 $DIR/main.py"

@@ -206,14 +206,11 @@ bash ~/desktop-stickers/enable-blur.sh
 开关状态保存在 `~/.config/sysstickers/lyrics-tray.json`；开机自启会读取该状态，
 **关掉之后重启系统也不会自己回来**。插件日志在 `~/.cache/sysstickers/lyrics-tray.log`。
 
-## 灵动岛
+## 灵动岛（GNOME Shell 扩展）
 
 > 分支 `feature/dynamic-island`：macOS Dynamic Island 风格的顶栏胶囊。
-> 提供两种实现，二选一（**推荐顶栏扩展版**）：
-> - **GNOME Shell 扩展**：直接画在顶栏正中间，启用时接管系统时钟，置顶与动画最自然
-> - **GTK4 悬浮窗（原型）**：独立窗口贴在顶栏下方，不需要注销，适合拿来做视觉调试
 
-![灵动岛](docs/island.png)
+![灵动岛](docs/island-panel.png)
 
 顶部居中、纯黑圆角胶囊：**悬停展开、移开约 1.5 秒自动收起，点击可以「钉住」**。
 
@@ -224,16 +221,27 @@ bash ~/desktop-stickers/enable-blur.sh
   - 想只让灵动岛显示、不要系统的通知横幅：
     `gsettings set org.gnome.desktop.notifications show-banners false`
     （通知仍会进入通知中心，不会丢；恢复就把 `false` 改回 `true`）
-  - 默认与 GNOME 自己的横幅并存
 - 展开态（播放中）：封面 / 歌名 / 歌手 / 可拖动进度条 / 上一曲 · 播放 · 下一曲 / 当前歌词
 - 展开态（闲置）：大时钟 + 日期，今日花费 / tokens / 累计，近 7 天柱状图与厂商余额
 
-### 方案一：GNOME Shell 扩展（推荐，顶栏正中间）
+### 安装
 
 ```bash
 bash island-panel/install-island.sh          # 安装并启用（第一次需要注销重新登录一次）
 bash island-panel/install-island.sh --remove # 卸载（系统时钟会随之恢复）
 ```
+
+### 开关
+
+- **扩展应用**（GNOME 活动 → 搜索「扩展」）：找到「灵动岛」开关即可
+- 命令行：
+
+  ```bash
+  gnome-extensions disable lyrics-panel@loong   # 停用（系统时钟立刻回来）
+  gnome-extensions enable  lyrics-panel@loong   # 启用
+  ```
+
+### 说明
 
 - 直接画在顶栏正中间：**启用时隐藏系统时钟**，点击岛上的时间可打开日历 / 通知面板
 - 悬停展开用 Clutter 动画，浮在所有窗口之上，跟随顶栏布局
@@ -244,38 +252,6 @@ bash island-panel/install-island.sh --remove # 卸载（系统时钟会随之恢
 - 扩展 uuid 沿用 `lyrics-panel@loong`（从旧的「顶栏歌词」扩展升级而来，直接覆盖安装即可）
 - 数据复用项目里的 Python 模块：安装脚本会把 `api_usage.py`、`settings.py` 复制进扩展目录，
   扩展每分钟调用一次 `python3 api_usage.py --json` 拿用量与余额（余额本身有 10 分钟缓存）
-
-### 方案二：GTK4 悬浮窗（原型，无需注销）
-
-```bash
-python3 island.py                    # 正常模式（跟随真实播放器）
-python3 island.py --demo             # 演示模式：假音乐 + 假数据，方便调样式
-python3 island.py --state expanded-music --snapshot docs/island.png   # 渲染截图（写文档用）
-```
-
-- 独立透明窗口贴在顶栏下方居中，胶囊在窗口内逐帧变形（约 60fps）；
-  每帧用 XShape 把窗口输入区域收成胶囊本身，**胶囊之外的点击 / 悬停会穿透到桌面**
-- 通过 XWayland 定位，尽力实现「置顶 / 不进任务栏 / 不抢键盘焦点」
-  （GTK4 没有置顶 API，这里用 `_NET_WM_STATE_ABOVE` + `_NET_WM_WINDOW_TYPE_DOCK`）
-
-开关（GTK 版；状态会被记住，重启后保持）：
-
-1. **应用菜单**（GNOME 活动 → 搜索「灵动岛」）：点击即开/关切换
-2. **任意贴纸右键菜单 →「灵动岛」**：打勾 = 已开启，点一下切换
-3. 命令行：
-
-   ```bash
-   python3 island.py --status   # 查看状态（running / stopped）
-   python3 island.py --start    # 打开
-   python3 island.py --stop     # 关闭
-   python3 island.py --toggle   # 切换
-   ```
-
-开关状态保存在 `~/.config/sysstickers/island.json`；开机自启（`island.py --autostart`）
-会读取该状态，**关掉之后重启系统也不会自己回来**（与顶栏歌词的约定一致）。
-日志在 `~/.cache/sysstickers/island.log`。
-
-> 两版同时开着会看到两个岛：装了顶栏扩展后建议 `python3 island.py --stop` 把 GTK 版关掉。
 
 ## 毛玻璃效果说明
 
@@ -356,7 +332,7 @@ Key 的查找顺序：`api_keys`（写死在设置里，可选）→ **OpenCode 
 ## 开机自启
 
 ```bash
-bash install-autostart.sh          # 贴纸 / 顶栏歌词 / 灵动岛：加入自启 + 应用菜单快捷方式
+bash install-autostart.sh          # 贴纸 / 顶栏歌词：加入自启 + 应用菜单快捷方式
 bash install-autostart.sh --remove # 卸载
 ```
 
@@ -398,8 +374,6 @@ desktop-stickers/
 ├── positioner.py         # X11 窗口定位与位置记忆
 ├── lyrics.py             # 歌词获取解析（网易云优先，lrclib 兜底）
 ├── lyrics_tray.py        # 顶栏歌词插件（独立进程，可单独启停）
-├── island.py             # 灵动岛原型（实验性分支：悬浮胶囊，GTK4）
-├── island.css            # 灵动岛样式（纯黑胶囊 / 白色文字）
 ├── covers.py             # 专辑封面下载与顶栏图标位图
 ├── recent.py             # 「最近使用文件」解析
 ├── style.css             # 毛玻璃主题（颜色 / 圆角 / 阴影）

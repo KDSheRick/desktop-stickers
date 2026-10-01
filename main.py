@@ -66,7 +66,6 @@ from widgets import (  # noqa: E402
 )
 
 APP_ID = "com.loong.SysStickers"
-ISLAND_NAME = "com.loong.DynamicIsland"  # 与 island.py 的 APP_ID 保持一致
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSS_FILE = os.path.join(BASE_DIR, "style.css")
 REFRESH_INTERVAL_MS = 1000
@@ -136,7 +135,6 @@ def attach_menu(window: Gtk.Window, root_box: Gtk.Widget) -> None:
     menu.append("复位全部贴纸", "app.reset-stickers")
     menu.append("切换深浅玻璃", "app.toggle-theme")
     menu.append("顶栏歌词", "app.toggle-lyrics")
-    menu.append("灵动岛", "app.toggle-island")
     menu.append("贴纸设置…", "app.open-control")
     menu.append("退出", "app.quit")
 
@@ -641,15 +639,6 @@ class StickerApp(Gtk.Application):
             Gio.BusType.SESSION, CONTROL_NAME, Gio.BusNameWatcherFlags.NONE,
             self._on_lyrics_appeared, self._on_lyrics_vanished)
 
-        # 灵动岛开关（勾选状态跟随灵动岛进程；名字与 island.py 的 APP_ID 一致）
-        self._island_action = Gio.SimpleAction.new_stateful(
-            "toggle-island", None, GLib.Variant("b", False))
-        self._island_action.connect("activate", self._on_toggle_island)
-        self.add_action(self._island_action)
-        Gio.bus_watch_name(
-            Gio.BusType.SESSION, ISLAND_NAME, Gio.BusNameWatcherFlags.NONE,
-            self._on_island_appeared, self._on_island_vanished)
-
     def _on_lyrics_appeared(self, _conn, _name, _owner) -> None:
         self._lyrics_action.set_state(GLib.Variant("b", True))
 
@@ -661,19 +650,6 @@ class StickerApp(Gtk.Application):
         script = os.path.join(BASE_DIR, "lyrics_tray.py")
         subprocess.Popen(
             [sys.executable, script, "--toggle"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True)
-
-    def _on_island_appeared(self, _conn, _name, _owner) -> None:
-        self._island_action.set_state(GLib.Variant("b", True))
-
-    def _on_island_vanished(self, _conn, _name) -> None:
-        self._island_action.set_state(GLib.Variant("b", False))
-
-    def _on_toggle_island(self, _action, _param) -> None:
-        """在当前进程外开 / 关灵动岛（独立进程、状态会被记住，自启也尊重它）。"""
-        subprocess.Popen(
-            [sys.executable, os.path.join(BASE_DIR, "island.py"), "--toggle"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
 

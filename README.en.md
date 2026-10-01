@@ -97,16 +97,11 @@ python3 lyrics_tray.py --toggle   # switch
 - The on/off state is remembered and respected by autostart
 - Requires Ubuntu's `ubuntu-appindicators` extension (enabled by default)
 
-## Dynamic Island
+## Dynamic Island (GNOME Shell extension)
 
 > Branch `feature/dynamic-island`: a macOS Dynamic Island–style capsule at the top.
-> Two implementations, pick one (**the top-bar extension is recommended**):
-> - **GNOME Shell extension**: drawn right in the center of the top bar, takes over the
->   system clock while enabled; native stacking and Clutter animations
-> - **GTK4 floating window (prototype)**: a detached window below the top bar, no logout
->   needed; handy for iterating on the visuals
 
-![Dynamic Island](docs/island.png)
+![Dynamic Island](docs/island-panel.png)
 
 A pure-black capsule centered at the top: **hover to expand, move away → collapses after
 ~1.5 s, click to pin it open**.
@@ -120,19 +115,29 @@ A pure-black capsule centered at the top: **hover to expand, move away → colla
   center; hovering pauses the countdown
   - To show them *only* in the island (no GNOME banners):
     `gsettings set org.gnome.desktop.notifications show-banners false`
-    (notifications still go to the notification center; set it back to `true` to
-    restore the banners)
 - Expanded (playing): cover / title / artist / draggable progress bar / prev · play · next /
   current lyric
 - Expanded (idle): large clock + date, today's cost / tokens / total, 7-day mini bar chart
   and provider balances
 
-### Option 1 — GNOME Shell extension (recommended, top bar center)
+### Install
 
 ```bash
 bash island-panel/install-island.sh          # install & enable (log out once on first install)
 bash island-panel/install-island.sh --remove # uninstall (the system clock comes back)
 ```
+
+### Toggling
+
+- **Extensions app** (Activities → "Extensions"): toggle "Dynamic Island"
+- Command line:
+
+  ```bash
+  gnome-extensions disable lyrics-panel@loong   # disable (clock returns instantly)
+  gnome-extensions enable  lyrics-panel@loong   # enable
+  ```
+
+### Notes
 
 - Drawn in the top bar center: **hides the system clock** while enabled; clicking the time
   opens the calendar / notifications
@@ -146,32 +151,6 @@ bash island-panel/install-island.sh --remove # uninstall (the system clock comes
 - Data comes from the Python helpers: the installer copies `api_usage.py` and `settings.py`
   into the extension dir and the extension runs `python3 api_usage.py --json` once a minute
   (balances are cached on disk for 10 minutes)
-
-### Option 2 — GTK4 floating window (prototype, no logout)
-
-```bash
-python3 island.py                    # normal mode (follows your real player)
-python3 island.py --demo             # demo data, no player needed
-python3 island.py --state expanded-music --snapshot docs/island.png   # render a screenshot
-```
-
-- A transparent window pinned below the top bar; the capsule morphs inside it at ~60 fps.
-  Each frame the XShape input region is shrunk to the capsule, so clicks/hover outside it
-  pass through to the desktop
-- Positioned via XWayland with best-effort always-on-top / skip-taskbar / no-keyboard-focus
-  (`_NET_WM_STATE_ABOVE` + `_NET_WM_WINDOW_TYPE_DOCK`, since GTK4 has no keep-above API)
-
-Toggling (GTK version; state is remembered):
-
-1. **App menu** (Activities → search "Dynamic Island")
-2. **Right-click any sticker → "灵动岛"**
-3. Command line: `python3 island.py --status | --start | --stop | --toggle`
-
-The state lives in `~/.config/sysstickers/island.json` and autostart respects it.
-Logs: `~/.cache/sysstickers/island.log`.
-
-> Running both versions shows two islands — after installing the extension, stop the GTK
-> one with `python3 island.py --stop`.
 
 ## Autostart & blur
 
