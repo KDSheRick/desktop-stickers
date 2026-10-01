@@ -1,0 +1,195 @@
+/* ==========================================================================
+   灵动岛（GNOME Shell 扩展）样式
+   纯黑胶囊 + 白色文字，风格与桌面贴纸、GTK 版灵动岛保持一致。
+   （St 的 CSS 是子集：字号只支持整数 px，复杂布局在 island.js 里用代码设置。）
+   ========================================================================== */
+
+.island {
+  background-color: #000000;
+  border-radius: 24px;
+  color: rgba(255, 255, 255, 0.96);
+}
+
+/* ---------------------------------------------------------------- 布局间距
+   （St.BoxLayout 没有 spacing 属性，间距只能写在 CSS 里） */
+
+.island-collapsed {
+  padding: 0 12px;
+  spacing: 8px;
+}
+
+.island-expanded {
+  padding: 46px 16px 12px 16px;
+  spacing: 10px;
+}
+
+.island-idle {
+  spacing: 15px;
+}
+
+.island-row {
+  spacing: 10px;
+}
+
+.island-gap-16 {
+  spacing: 16px;
+}
+
+.island-meta {
+  spacing: 2px;
+}
+
+.island-api {
+  spacing: 1px;
+}
+
+.island-controls {
+  spacing: 8px;
+}
+
+.island-eq {
+  spacing: 3px;
+  min-height: 14px;
+}
+
+.island-bars {
+  spacing: 6px;
+  min-height: 30px;
+}
+
+/* ---------------------------------------------------------------- 文字 */
+
+.island-mini {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.island-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.island-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.island-clock {
+  font-size: 34px;
+  font-weight: 300;
+  color: #ffffff;
+}
+
+.island-date {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.60);
+}
+
+.island-lyric {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.80);
+}
+
+.island-lyric-icon {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.island-time {
+  min-width: 36px;
+}
+
+.island-foot {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.island-balance {
+  font-size: 10px;
+  color: #7ee2a8;
+}
+
+.island-api-today {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* ---------------------------------------------------------------- 封面 */
+
+.island-cover {
+  background-color: rgba(255, 255, 255, 0.10);
+  border-radius: 6px;
+}
+
+.island-cover-mini {
+  background-size: 22px 22px;
+  min-width: 22px;
+  min-height: 22px;
+  max-width: 22px;
+  max-height: 22px;
+}
+
+.island-cover-large {
+  background-size: 54px 54px;
+  min-width: 54px;
+  min-height: 54px;
+  max-width: 54px;
+  max-height: 54px;
+  border-radius: 14px;
+}
+
+.island-cover-note {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- 波形 / 柱状图 / 进度条 */
+
+.island-eq-bar {
+  background-color: rgba(255, 255, 255, 0.92);
+  border-radius: 2px;
+  min-width: 3px;
+  max-width: 3px;
+}
+
+.island-bar {
+  background-color: rgba(158, 163, 178, 0.55);
+  border-radius: 3px;
+  min-width: 22px;
+  max-width: 22px;
+}
+
+.island-bar-today {
+  background-color: #e66100;
+}
+
+.island-seek {
+  min-height: 14px;
+}
+
+./* ---------------------------------------------------------------- 按钮 */
+
+.island-btn {
+  border-radius: 14px;
+  background-color: rgba(255, 255, 255, 0.10);
+  color: #ffffff;
+  padding: 7px;
+}
+
+.island-btn:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.island-play {
+  border-radius: 15px;
+  background-color: #ffffff;
+  color: #000000;
+  padding: 8px;
+}
+
+.island-play:hover {
+  background-color: rgba(255, 255, 255, 0.85);
+}

@@ -1,0 +1,7 @@
+{
+  "uuid": "lyrics-panel@loong",
+  "name": "灵动岛 (Dynamic Island)",
+  "description": "顶栏正中间的灵动岛：悬停展开显示音乐 / 歌词 / 时钟 / API 用量；播放时显示迷你封面与波形，启用时接管系统时钟。",
+  "shell-version": ["50"],
+  "version": 3
+}

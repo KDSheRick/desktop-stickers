@@ -51,6 +51,9 @@ _USAGE_TTL = 8.0      # 秒：OpenCode 用量刷新间隔
 _BALANCE_TTL = 600.0  # 秒：余额查询间隔（避免频繁请求）
 _HTTP_TIMEOUT = 10.0
 
+_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "sysstickers")
+_BALANCE_CACHE_FILE = os.path.join(_CACHE_DIR, "balances.json")
+
 _usage_cache: dict = {"at": 0.0, "value": None}
 _balance_cache: dict = {"at": 0.0, "value": None}
 
@@ -283,13 +286,48 @@ def _fetch_one(provider: dict) -> dict:
 
 
 def fetch_balances(providers: list[dict], force: bool = False) -> list[dict]:
-    """查询各厂商余额（阻塞，请在后台线程里调用）；结果带缓存。"""
+    """查询各厂商余额（阻塞，请在后台线程里调用）；结果带缓存。
+
+    缓存分两层：进程内缓存 + 磁盘缓存（~/.cache/sysstickers/balances.json）。
+    磁盘缓存让「每次启动/每次被调用都重新联网」变成最多 10 分钟一次。
+    """
     now = time.monotonic()
-    if not force and _balance_cache["value"] is not None and now - _balance_cache["at"] < _BALANCE_TTL:
-        return _balance_cache["value"]
+    if not force:
+        if _balance_cache["value"] is not None and now - _balance_cache["at"] < _BALANCE_TTL:
+            return _balance_cache["value"]
+        disk = _load_disk_balances()
+        if disk is not None:
+            _balance_cache.update(at=now, value=disk)
+            return disk
     value = [_fetch_one(provider) for provider in providers]
     _balance_cache.update(at=now, value=value)
+    _save_disk_balances(value)
     return value
+
+
+def _load_disk_balances() -> list[dict] | None:
+    """读磁盘余额缓存；过期或损坏返回 None。"""
+    try:
+        with open(_BALANCE_CACHE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if time.time() - float(data.get("at", 0)) >= _BALANCE_TTL:
+            return None
+        balances = data.get("balances")
+        if isinstance(balances, list) and balances:
+            return balances
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _save_disk_balances(balances: list[dict]) -> None:
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_BALANCE_CACHE_FILE + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump({"at": time.time(), "balances": balances}, fh, ensure_ascii=False)
+        os.replace(_BALANCE_CACHE_FILE + ".tmp", _BALANCE_CACHE_FILE)
+    except OSError:
+        pass
 
 
 def balances_cached() -> list[dict] | None:
@@ -325,6 +363,21 @@ def fmt_balance(balance, currency: str) -> str:
 
 
 if __name__ == "__main__":  # 自测：python3 api_usage.py
+    import sys
+
+    if "--json" in sys.argv:
+        # 供灵动岛扩展（GNOME Shell）调用：一次输出用量 + 余额
+        import settings as settings_module
+
+        values = settings_module.load()
+        providers = load_providers(values)
+        result = {
+            "usage": opencode_usage(force=True),
+            "balances": fetch_balances(providers),
+        }
+        print(json.dumps(result, ensure_ascii=False))
+        raise SystemExit(0)
+
     print("OpenCode 用量:", json.dumps(opencode_usage(force=True), ensure_ascii=False))
 
     import settings as settings_module

@@ -206,15 +206,12 @@ bash ~/desktop-stickers/enable-blur.sh
 开关状态保存在 `~/.config/sysstickers/lyrics-tray.json`；开机自启会读取该状态，
 **关掉之后重启系统也不会自己回来**。插件日志在 `~/.cache/sysstickers/lyrics-tray.log`。
 
-> 另外 `lyrics-panel/` 目录里有一个**原生顶栏文字扩展（实验性）**（无托盘图标，显示在左侧
-> Activities 旁）：`bash lyrics-panel/install-lyrics-panel.sh` 安装后需要**注销重新登录**一次
-> 才会加载。两种方式二选一即可，一般推荐上面的插件方案。
+## 灵动岛
 
-## 灵动岛（实验性原型）
-
-> 分支 `feature/dynamic-island`：macOS Dynamic Island 风格的桌面悬浮胶囊。
-> **当前是 GTK4 原型**，用于先确定外观和交互；后续计划移植成 GNOME Shell 扩展
-> （原生置顶、Clutter 动画更顺滑）。
+> 分支 `feature/dynamic-island`：macOS Dynamic Island 风格的顶栏胶囊。
+> 提供两种实现，二选一（**推荐顶栏扩展版**）：
+> - **GNOME Shell 扩展**：直接画在顶栏正中间，启用时接管系统时钟，置顶与动画最自然
+> - **GTK4 悬浮窗（原型）**：独立窗口贴在顶栏下方，不需要注销，适合拿来做视觉调试
 
 ![灵动岛](docs/island.png)
 
@@ -222,8 +219,26 @@ bash ~/desktop-stickers/enable-blur.sh
 
 - 收起态：无播放时显示时间；播放时显示迷你封面 + 跳动波形
 - 展开态（播放中）：封面 / 歌名 / 歌手 / 可拖动进度条 / 上一曲 · 播放 · 下一曲 / 当前歌词
-  ，底栏显示时钟与今日花费、余额
-- 展开态（闲置）：大时钟 + 日期，右侧今日花费 / tokens / 累计，以及近 7 天柱状图与厂商余额
+- 展开态（闲置）：大时钟 + 日期，今日花费 / tokens / 累计，近 7 天柱状图与厂商余额
+
+### 方案一：GNOME Shell 扩展（推荐，顶栏正中间）
+
+```bash
+bash island-panel/install-island.sh          # 安装并启用（第一次需要注销重新登录一次）
+bash island-panel/install-island.sh --remove # 卸载（系统时钟会随之恢复）
+```
+
+- 直接画在顶栏正中间：**启用时隐藏系统时钟**，点击岛上的时间可打开日历 / 通知面板
+- 悬停展开用 Clutter 动画，浮在所有窗口之上，跟随顶栏布局
+- 之所以「第一次要注销」：GNOME 45+ 每个 Shell 进程只 import 一次扩展模块；
+  扩展内置了一个小加载器，之后改 `island.js` / `media.js` / `usage.js` / `stylesheet.css`
+  都能用 `gnome-extensions disable/enable lyrics-panel@loong` 热重载，只有改入口
+  `extension.js` 才需要再注销一次
+- 扩展 uuid 沿用 `lyrics-panel@loong`（从旧的「顶栏歌词」扩展升级而来，直接覆盖安装即可）
+- 数据复用项目里的 Python 模块：安装脚本会把 `api_usage.py`、`settings.py` 复制进扩展目录，
+  扩展每分钟调用一次 `python3 api_usage.py --json` 拿用量与余额（余额本身有 10 分钟缓存）
+
+### 方案二：GTK4 悬浮窗（原型，无需注销）
 
 ```bash
 python3 island.py                    # 正常模式（跟随真实播放器）
@@ -231,7 +246,12 @@ python3 island.py --demo             # 演示模式：假音乐 + 假数据，�
 python3 island.py --state expanded-music --snapshot docs/island.png   # 渲染截图（写文档用）
 ```
 
-### 开关方式（状态会被记住，重启后保持）
+- 独立透明窗口贴在顶栏下方居中，胶囊在窗口内逐帧变形（约 60fps）；
+  每帧用 XShape 把窗口输入区域收成胶囊本身，**胶囊之外的点击 / 悬停会穿透到桌面**
+- 通过 XWayland 定位，尽力实现「置顶 / 不进任务栏 / 不抢键盘焦点」
+  （GTK4 没有置顶 API，这里用 `_NET_WM_STATE_ABOVE` + `_NET_WM_WINDOW_TYPE_DOCK`）
+
+开关（GTK 版；状态会被记住，重启后保持）：
 
 1. **应用菜单**（GNOME 活动 → 搜索「灵动岛」）：点击即开/关切换
 2. **任意贴纸右键菜单 →「灵动岛」**：打勾 = 已开启，点一下切换
@@ -248,16 +268,7 @@ python3 island.py --state expanded-music --snapshot docs/island.png   # 渲染�
 会读取该状态，**关掉之后重启系统也不会自己回来**（与顶栏歌词的约定一致）。
 日志在 `~/.cache/sysstickers/island.log`。
 
-实现说明：
-
-- 窗口是**固定大小的透明窗**，胶囊在窗口内逐帧变形（约 60fps）；每帧用 XShape
-  把窗口输入区域收成胶囊本身，因此**胶囊之外的点击/悬停会穿透到桌面**
-- 通过 XWayland 定位到顶栏正下方居中，并尽力实现「置顶 / 不进任务栏 / 不抢键盘焦点」
-  （GTK4 没有置顶 API，这里用 `_NET_WM_STATE_ABOVE` + `_NET_WM_WINDOW_TYPE_DOCK`）
-- 复用现有模块：MPRIS 采样、歌词 / 封面缓存、API 用量与余额，与贴纸共用同一份配置
-
-> 已知限制：Wayland 会话下 X11 客户端的置顶是「尽力而为」，个别全屏场景可能仍被盖住；
-> 移植成 Shell 扩展后会彻底解决（这也是后续计划）。
+> 两版同时开着会看到两个岛：装了顶栏扩展后建议 `python3 island.py --stop` 把 GTK 版关掉。
 
 ## 毛玻璃效果说明
 
@@ -388,7 +399,7 @@ desktop-stickers/
 ├── enable-blur.sh        # 开启 / 关闭窗口背景模糊
 ├── install.sh            # 一键安装（依赖检查 + 自启 + 菜单 + 启动）
 ├── install-autostart.sh  # 自启动与菜单快捷方式（被 install.sh 调用）
-├── lyrics-panel/         # 可选：原生顶栏文字扩展（实验性，需注销一次）
+├── island-panel/         # 灵动岛 GNOME Shell 扩展（顶栏版，首次安装需注销一次）
 ├── tools/                # 辅助脚本（含第三方 GPL 组件，见其 README）
 └── docs/                 # README 截图
 ```
