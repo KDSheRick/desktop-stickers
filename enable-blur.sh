@@ -38,10 +38,19 @@ then
     [ "${1:-}" != "--force" ] && exit 1
 fi
 
-# 圆角半径 = 卡片圆角（style.css 的 border-radius，16）+ 窗口留白（main.py 的 WINDOW_MARGIN，9）
-# 让模糊轮廓与卡片圆角同心、边缘宽度均匀。修改上述两项后请同步调整这里的值。
-gsettings set "$SCHEMA.applications" corner-radius 25
+# 圆角半径 = 卡片圆角（设置文件里的 radius）+ 窗口留白（9）
+# 这样模糊轮廓与卡片圆角同心、边缘宽度均匀。改圆角请用「贴纸设置」控制器，
+# 它会自动同步这个值；这里作为兜底也会读一次设置。
+RADIUS="$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.config/sysstickers/settings.json'), encoding='utf-8') as fh:
+        print(int(json.load(fh).get('radius', 16)) + 9)
+except Exception:
+    print(25)
+")"
+gsettings set "$SCHEMA.applications" corner-radius "$RADIUS"
 gsettings set "$SCHEMA.applications" whitelist "['*SysStickers*','*sysstickers*']"
 
-echo "已开启：贴纸背景模糊 + 圆角（25px，与卡片同心）。"
+echo "已开启：贴纸背景模糊 + 圆角（${RADIUS}px，与卡片同心）。"
 echo "提示：如果是刚安装完库，需要先注销/重新登录一次，扩展才能加载到它。"

@@ -218,6 +218,20 @@ def spawn_daemon() -> None:
             start_new_session=True)
 
 
+def start_daemon() -> None:
+    """打开插件（记住开启状态）。"""
+    store_enabled(True)
+    if not is_running():
+        spawn_daemon()
+
+
+def stop_daemon() -> None:
+    """关闭插件（记住关闭状态）。"""
+    if is_running():
+        _control_call("Quit")
+    store_enabled(False)
+
+
 # ---------------------------------------------------------------- 托盘本体
 
 def _item_props(item_id: int) -> dict:

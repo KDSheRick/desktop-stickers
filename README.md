@@ -43,6 +43,21 @@
 - 每张贴纸都可以**单独拖动**，位置单独记忆，下次启动精确恢复
 - 右键 → 「复位全部贴纸」一键把左右两列排回默认位置
 
+## 一键安装（推荐）
+
+```bash
+git clone https://github.com/KDSheRick/desktop-stickers.git
+cd desktop-stickers
+bash install.sh
+```
+
+脚本会自动完成：**依赖检查 → 加入开机自启 → 创建应用菜单快捷方式（贴纸 / 顶栏歌词 / 贴纸设置）
+→ 启动贴纸与顶栏歌词 → 若已安装 GNOME Rounded Blur 库则自动开启背景模糊**。
+
+```bash
+bash install.sh --remove   # 卸载（自启动与菜单快捷方式）
+```
+
 ## 运行
 
 依赖系统自带的组件（Ubuntu 已预装，无需 pip / 无需 root）：
@@ -109,18 +124,35 @@ bash ~/desktop-stickers/enable-blur.sh
   两者同心、边缘宽度均匀）。若修改了 `style.css` 的圆角或 `main.py` 的 `WINDOW_MARGIN`，
   建议把该值同步改为两者之和
 
+## 控制器：实时调整外观
+
+从**任意贴纸右键菜单 →「贴纸设置…」**，或应用菜单搜索「贴纸设置」打开控制器：
+
+| 可调项 | 范围 | 说明 |
+| --- | --- | --- |
+| 卡片宽度 | 110–260 | 宽卡（时钟 / 系统 / 右列）自动保持两列宽 |
+| 圆角 | 0–40 | 同时**自动同步 Blur my Shell 的模糊圆角**（圆角 + 9），保持内外同心 |
+| 玻璃不透明度 | 0.15–0.98 | 深色玻璃的不透明度（浅色玻璃自动 +0.13） |
+| 卡片间距 / 屏幕边距 | 0–80 / 0–300 | 整组贴纸的排布位置 |
+| 深色玻璃 / 顶栏歌词 | 开关 | 主题切换与歌词插件开关 |
+| 复位贴纸位置 | 按钮 | 清空拖动记忆，回到默认排布 |
+
+所有改动**实时生效**（设置写在 `~/.config/sysstickers/settings.json`，主程序监听文件并立即应用），
+不需要重启；单独拖动某张贴纸依然可以微调它自己的位置。
+
 ## 尺寸调整
+
+优先用[控制器](#控制器实时调整外观)；想改更细的参数（代码里的常量）也可以：
 
 | 想改什么 | 改哪里 |
 | --- | --- |
-| 卡片宽度 | `widgets.py` 顶部 `CARD_WIDTH`（普通卡）/ `WIDE_WIDTH`（宽卡：时钟、系统、右列） |
+| 卡片宽度 / 圆角 / 不透明度 / 间距 | 控制器，或 `settings.py` 的 `DEFAULTS` |
 | 圆环大小 / 折线高度 | `widgets.py` 中 `RING_SIZE` / `SPARK_HEIGHT` |
 | 音乐卡封面 / 按钮大小 | `widgets.py` 中 `MUSIC_COVER` / `PLAY_SIZE` / `SKIP_SIZE` |
-| 贴纸间距 / 距屏幕边距 | `main.py` 顶部 `GAP` / `MARGIN_X` / `MARGIN_TOP` |
 | 阴影留白（窗口内边距） | `main.py` 顶部 `WINDOW_MARGIN` |
 | 右侧贴纸的显示与顺序 | `main.py` 顶部 `RIGHT_COLUMN`（默认音乐/常用文件/进程） |
 | 顶栏歌词最长宽度 | `lyrics_tray.py` 的 `MAX_CELLS` |
-| 字号、内边距、圆角 | `style.css` |
+| 字号、内边距、颜色细节 | `style.css` |
 
 > 刷新间隔：`main.py` 的 `REFRESH_INTERVAL_MS`（毫秒）
 
@@ -242,6 +274,8 @@ bash install-autostart.sh --remove # 卸载
 ```
 desktop-stickers/
 ├── main.py               # 程序入口：窗口、布局、右键菜单、顶栏歌词开关
+├── control.py            # 设置控制器（实时调尺寸 / 圆角 / 透明度 / 位置）
+├── settings.py           # 设置的读写与样式生成（settings.json）
 ├── widgets.py            # 卡片组件（圆环 / 进度条 / 封面 / 文件卡 / 进程卡 / 可拖动进度条……）
 ├── collectors.py         # 数据采集（CPU、内存、磁盘、网络、进程、温度、风扇、MPRIS）
 ├── positioner.py         # X11 窗口定位与位置记忆
@@ -251,7 +285,8 @@ desktop-stickers/
 ├── recent.py             # 「最近使用文件」解析
 ├── style.css             # 毛玻璃主题（颜色 / 圆角 / 阴影）
 ├── enable-blur.sh        # 开启 / 关闭窗口背景模糊
-├── install-autostart.sh  # 开机自启 + 应用菜单快捷方式
+├── install.sh            # 一键安装（依赖检查 + 自启 + 菜单 + 启动）
+├── install-autostart.sh  # 自启动与菜单快捷方式（被 install.sh 调用）
 ├── lyrics-panel/         # 可选：原生顶栏文字扩展（实验性，需注销一次）
 ├── tools/                # 辅助脚本（含第三方 GPL 组件，见其 README）
 └── docs/                 # README 截图

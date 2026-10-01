@@ -12,9 +12,10 @@ STICKERS_AUTOSTART="$AUTOSTART_DIR/sysstickers.desktop"
 STICKERS_APP="$APPS_DIR/sysstickers.desktop"
 LYRICS_AUTOSTART="$AUTOSTART_DIR/sysstickers-lyrics.desktop"
 LYRICS_APP="$APPS_DIR/sysstickers-lyrics.desktop"
+CONTROL_APP="$APPS_DIR/sysstickers-control.desktop"
 
 if [[ "${1:-}" == "--remove" ]]; then
-    rm -f "$STICKERS_AUTOSTART" "$STICKERS_APP" "$LYRICS_AUTOSTART" "$LYRICS_APP"
+    rm -f "$STICKERS_AUTOSTART" "$STICKERS_APP" "$LYRICS_AUTOSTART" "$LYRICS_APP" "$CONTROL_APP"
     command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" || true
     echo "已移除开机自启和快捷方式。"
     exit 0
@@ -80,14 +81,32 @@ EOF
 write_desktop_file "$STICKERS_AUTOSTART" 5
 write_lyrics_autostart
 
+# 应用菜单里的「贴纸设置」控制器
+write_control_launcher() {
+    cat > "$CONTROL_APP" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=贴纸设置
+Name[en]=Sticker Settings
+Comment=调整卡片尺寸 / 位置 / 圆角 / 不透明度
+Exec=$PYTHON $DIR/control.py
+Path=$DIR
+Icon=preferences-desktop-theme
+Terminal=false
+StartupNotify=false
+EOF
+}
+
 # 应用菜单快捷方式
 write_desktop_file "$STICKERS_APP" ""
 write_lyrics_launcher
+write_control_launcher
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" || true
 
 echo "完成："
 echo "  贴纸自启  -> $STICKERS_AUTOSTART"
 echo "  歌词自启  -> $LYRICS_AUTOSTART（沿用上次开关状态）"
-echo "  应用菜单  -> $STICKERS_APP / $LYRICS_APP"
+echo "  应用菜单  -> $STICKERS_APP / $LYRICS_APP / $CONTROL_APP（贴纸设置）"
 echo "立即体验：python3 $DIR/main.py"

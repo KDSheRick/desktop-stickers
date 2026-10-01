@@ -36,6 +36,22 @@ both panels share the same width and are anchored to the screen corners.
 - `python3-gi`, `gir1.2-gtk-4.0`, `python3-psutil` (preinstalled on Ubuntu)
 - Optional: `python3-pil` (rounded cover icons), `blur-my-shell` extension for real blur
 
+## One-click install
+
+```bash
+git clone https://github.com/KDSheRick/desktop-stickers.git
+cd desktop-stickers
+bash install.sh
+```
+
+The script checks dependencies, adds autostart, creates app-menu shortcuts
+(Stickers / Lyrics / Settings), starts everything, and enables real background
+blur if the GNOME Rounded Blur library is present.
+
+```bash
+bash install.sh --remove   # remove autostart + menu shortcuts
+```
+
 ## Run
 
 ```bash
@@ -44,7 +60,25 @@ python3 main.py
 ```
 
 Drag any sticker to move it (positions are remembered). Right-click any sticker for
-the menu: reset layout / toggle dark-light / toggle the top-bar lyrics / quit.
+the menu: reset layout / toggle dark-light / toggle the top-bar lyrics / **settings** / quit.
+
+## Settings controller
+
+Open it from **any sticker's right-click menu → 贴纸设置…**, or search for
+"贴纸设置" (Sticker Settings) in the app menu:
+
+| Option | Range | Notes |
+| --- | --- | --- |
+| Card width | 110–260 | wide cards (clock / system / right column) stay two columns wide |
+| Corner radius | 0–40 | automatically syncs Blur my Shell's corner radius (radius + 9) so inner/outer corners stay concentric |
+| Glass opacity | 0.15–0.98 | dark glass opacity (light glass uses +0.13) |
+| Card gap / screen margins | — | position of the whole layout |
+| Dark glass / Top-bar lyrics | switches | theme and plugin toggles |
+| Reset positions | button | clears drag memory and re-applies the layout |
+
+Changes apply **live** (written to `~/.config/sysstickers/settings.json`; the running
+app watches the file), no restart needed. Individual stickers can still be dragged
+for fine-tuning.
 
 ## Top-bar lyrics (standalone plugin)
 
@@ -72,12 +106,15 @@ bash tools/gnome-rounded-blur/rounded_blur_build.sh -i   # install that library 
 
 ## Customization
 
+Prefer the [settings controller](#settings-controller); for finer tweaks you can still
+edit the constants:
+
 | What | Where |
 | --- | --- |
-| Card width | `widgets.py`: `CARD_WIDTH` / `WIDE_WIDTH` |
+| Card width / radius / opacity / gap | the controller, or `settings.py` → `DEFAULTS` |
 | Cover size / buttons | `widgets.py`: `MUSIC_COVER` / `PLAY_SIZE` / `SKIP_SIZE` |
-| Margins / spacing | `main.py`: `GAP` / `MARGIN_X` / `MARGIN_TOP` |
-| Colors, radius, fonts | `style.css` |
+| Margins | `main.py`: `WINDOW_MARGIN` |
+| Colors, fonts | `style.css` |
 | Top-bar lyrics width | `lyrics_tray.py`: `MAX_CELLS` |
 
 > Note: if you change the card corner radius in `style.css`, also set the

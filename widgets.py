@@ -216,6 +216,11 @@ class SeekBar(Gauge):
         self.add_controller(click)
         drag.group(click)
 
+    def set_width(self, width: int) -> None:
+        self._track_width = float(width)
+        self.set_size_request(width, int(self._widget_height))
+        self.queue_draw()
+
     def set_progress(self, fraction: float, color: tuple) -> None:
         """播放器上报的进度（拖动过程中不覆盖预览）。"""
         if self._scrub is None:
@@ -322,12 +327,16 @@ class Card(Gtk.Box):
             head.append(label)
             self.append(head)
 
+    def resize(self, width: int) -> None:
+        """调整卡片宽度（用户在控制器里改「卡片宽度」时由主程序调用）。"""
+        self.set_size_request(width, -1)
+
 
 class ClockCard(Card):
     """大号时钟 + 日期。"""
 
-    def __init__(self):
-        super().__init__(spacing=2)
+    def __init__(self, width: int = CARD_WIDTH):
+        super().__init__(spacing=2, width=width)
         self.time_label = Gtk.Label(label="00:00:00")
         self.time_label.add_css_class("clock-time")
         self.time_label.set_halign(Gtk.Align.CENTER)
@@ -414,8 +423,8 @@ class RingCard(Card):
 class ThermalCard(RingCard):
     """温度 / 风扇卡片：圆环显示 CPU 温度，下方显示风扇转速。"""
 
-    def __init__(self):
-        super().__init__("温度 / 风扇", TEAL)
+    def __init__(self, width: int = CARD_WIDTH):
+        super().__init__("温度 / 风扇", TEAL, width=width)
 
     def refresh_thermal(self, temp_c: float | None, fan_rpm: float | None) -> None:
         if temp_c is None:
@@ -434,12 +443,13 @@ class ThermalCard(RingCard):
 class BarCard(Card):
     """横向圆角进度条卡片（磁盘 / 电池）。"""
 
-    def __init__(self, title: str, accent: tuple = GREEN):
-        super().__init__(title, accent)
+    def __init__(self, title: str, accent: tuple = GREEN, width: int = CARD_WIDTH):
+        super().__init__(title, accent, width=width)
         self._frac = 0.0
         self._color = accent
+        self._bar_width = max(40.0, float(width) - 26.0)
 
-        self.bar = Gauge(BAR_WIDTH, BAR_HEIGHT)
+        self.bar = Gauge(int(self._bar_width), BAR_HEIGHT)
         self.bar.set_margin_top(2)
         self.bar.set_halign(Gtk.Align.START)
         self.bar.set_draw_func(self._draw_bar)
@@ -458,7 +468,13 @@ class BarCard(Card):
         self.append(self.sub_label)
 
     def _draw_bar(self, snapshot) -> None:
-        draw_progress_bar(snapshot, self._frac, self._color)
+        draw_progress_bar(snapshot, self._frac, self._color, self._bar_width, BAR_HEIGHT)
+
+    def resize(self, width: int) -> None:
+        super().resize(width)
+        self._bar_width = max(40.0, float(width) - 26.0)
+        self.bar.set_size_request(int(self._bar_width), BAR_HEIGHT)
+        self.bar.queue_draw()
 
     def refresh(self, percent: float, value_text: str, sub_text: str, color: tuple | None = None) -> None:
         self._frac = percent / 100.0
@@ -471,8 +487,8 @@ class BarCard(Card):
 class BatteryCard(BarCard):
     """电池卡片：充电时蓝色 + ⚡，放电时显示剩余时间。"""
 
-    def __init__(self):
-        super().__init__("电池", GREEN)
+    def __init__(self, width: int = CARD_WIDTH):
+        super().__init__("电池", GREEN, width=width)
 
     def refresh_battery(self, battery: dict) -> None:
         percent = battery["percent"]
@@ -538,8 +554,8 @@ class CoverArt(Gtk.Widget):
 class MusicCard(Card):
     """音乐主打卡：封面 + 歌曲 / 歌手 / 进度条；无播放器时显示空闲态。"""
 
-    def __init__(self):
-        super().__init__("音乐", PURPLE, width=WIDE_WIDTH)
+    def __init__(self, width: int = WIDE_WIDTH):
+        super().__init__("音乐", PURPLE, width=width)
         self._frac = 0.0
         self._color = GREY
         self._cover_key: tuple | None = None
@@ -576,7 +592,8 @@ class MusicCard(Card):
         spacer = Gtk.Box()
         spacer.set_vexpand(True)
 
-        self.bar = SeekBar(MUSIC_BAR_WIDTH, MUSIC_SEEK_HEIGHT, self._on_scrub, self._on_seek)
+        self._bar_width = max(60.0, float(width) - 24.0 - MUSIC_COVER - 12.0)
+        self.bar = SeekBar(int(self._bar_width), MUSIC_SEEK_HEIGHT, self._on_scrub, self._on_seek)
         self.bar.set_halign(Gtk.Align.START)
 
         self.time_label = Gtk.Label(label=" ")
@@ -611,6 +628,11 @@ class MusicCard(Card):
         column.append(controls)
         row.append(column)
         self.append(row)
+
+    def resize(self, width: int) -> None:
+        super().resize(width)
+        self._bar_width = max(60.0, float(width) - 24.0 - MUSIC_COVER - 12.0)
+        self.bar.set_width(int(self._bar_width))
 
     # ------------------------------------------------------------ 播放控制
 
@@ -784,8 +806,9 @@ class NetCard(Card):
 
     HISTORY = 40
 
-    def __init__(self):
-        super().__init__("网络", GREEN)
+    def __init__(self, width: int = CARD_WIDTH):
+        super().__init__("网络", GREEN, width=width)
+        self._spark_width = max(40.0, float(width) - 26.0)
         self._down = deque([0.0] * self.HISTORY, maxlen=self.HISTORY)
         self._up = deque([0.0] * self.HISTORY, maxlen=self.HISTORY)
         self._peak = 1024.0
@@ -797,7 +820,7 @@ class NetCard(Card):
         self.up_label.add_css_class("net-line")
         self.up_label.set_halign(Gtk.Align.START)
 
-        self.spark = Gauge(SPARK_WIDTH, SPARK_HEIGHT)
+        self.spark = Gauge(int(self._spark_width), SPARK_HEIGHT)
         self.spark.set_margin_top(2)
         self.spark.set_halign(Gtk.Align.START)
         self.spark.set_draw_func(self._draw_spark)
@@ -825,8 +848,8 @@ class NetCard(Card):
         peak = max(max(down), max(up))
         # 量程平滑回落，避免折线剧烈跳动
         self._peak = max(peak, self._peak * 0.85, 1024.0)
-        self._plot_series(snapshot, down, BLUE, SPARK_WIDTH, SPARK_HEIGHT, self._peak)
-        self._plot_series(snapshot, up, PURPLE, SPARK_WIDTH, SPARK_HEIGHT, self._peak)
+        self._plot_series(snapshot, down, BLUE, self._spark_width, SPARK_HEIGHT, self._peak)
+        self._plot_series(snapshot, up, PURPLE, self._spark_width, SPARK_HEIGHT, self._peak)
 
     @staticmethod
     def _plot_series(snapshot, values: list, color: tuple,
@@ -865,8 +888,8 @@ class SystemCard(Card):
 
     _COLUMNS = (("主机", "内核", "负载"), ("系统", "运行"))
 
-    def __init__(self):
-        super().__init__("系统", GREY, width=WIDE_WIDTH)
+    def __init__(self, width: int = WIDE_WIDTH):
+        super().__init__("系统", GREY, width=width)
         self._values: dict[str, Gtk.Label] = {}
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
@@ -896,8 +919,8 @@ class SystemCard(Card):
 class ProcessCard(Card):
     """进程 Top 3（宽版）：名称 + CPU / 内存两列，悬停看 PID。"""
 
-    def __init__(self):
-        super().__init__("进程 Top 3", YELLOW, width=WIDE_WIDTH)
+    def __init__(self, width: int = WIDE_WIDTH):
+        super().__init__("进程 Top 3", YELLOW, width=width)
         self._rows: list[tuple[Gtk.Label, Gtk.Label, Gtk.Label]] = []
 
         grid = Gtk.Grid(column_spacing=12, row_spacing=6)
@@ -1071,8 +1094,8 @@ class RecentFileRow(Gtk.Box):
 class RecentFilesCard(Card):
     """常用文件卡片（宽版，两列）：最近经常打开的文件。"""
 
-    def __init__(self):
-        super().__init__("常用文件", BLUE, width=WIDE_WIDTH)
+    def __init__(self, width: int = WIDE_WIDTH):
+        super().__init__("常用文件", BLUE, width=width)
         self._grid = Gtk.Grid(column_spacing=14, row_spacing=7)
         self._grid.set_column_homogeneous(True)
         self.append(self._grid)
