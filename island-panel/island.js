@@ -398,7 +398,7 @@ export class Island {
         if (!this._marqueeBox || !this._miniLyric)
             return;
         const containerWidth = this._marqueeBox.width;
-        const textWidth = this._miniLyric.get_preferred_width()[1];
+        const textWidth = this._miniLyric.get_preferred_width(-1)[1];
         if (containerWidth <= 0 || textWidth <= 0) {
             // 还没上屏，稍后再试
             this._marqueeStartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
@@ -935,8 +935,15 @@ export class Island {
                 this._setSeekFill(length > 0 ? position / length : 0);
             }
 
-            const line = lineAt(this._lines, position) ||
+            let line = lineAt(this._lines, position) ||
                 [this._music.title, this._music.artist].filter(Boolean).join(' · ');
+            // 开发用：/tmp/island-test-lyric 的内容会覆盖当前歌词（测滚动用）
+            if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS) &&
+                GLib.file_test('/tmp/island-test-lyric', GLib.FileTest.EXISTS)) {
+                const [ok, contents] = GLib.file_get_contents('/tmp/island-test-lyric');
+                if (ok)
+                    line = new TextDecoder().decode(contents).trim() || line;
+            }
             setText(this._lyric, line);
             if (this._music.status === 'Playing')
                 this._updateMiniLyric(line);
