@@ -35,6 +35,8 @@ const W_MUSIC = 320;      // 播放中的收起态：长条胶囊，里面滚动
 const W_PAUSED = 124;     // 暂停时缩回小胶囊（封面 + 静止波形）
 // 歌词可视区宽度 = 长条 - 左右内边距(12×2) - 封面(22) - 两个间距(8×2) - 波形(20)
 const MARQUEE_W = W_MUSIC - 24 - 22 - 16 - 20;
+const MARQUEE_SPEED = 45;   // 滚动速度（逻辑像素/秒）
+const MARQUEE_GAP = 28;     // 一圈滚完到下一圈之间的间隔
 const W_EXPANDED = 424;
 const H_COLLAPSED = 34;
 const H_EXPANDED = 210;
@@ -116,9 +118,11 @@ export class Island {
         this._balances = [];
         this._eqPhase = 0;
         this._scrubbing = false;
-        this._marqueeTimer = 0;
-        this._marqueeRetryId = 0;
         this._miniLyricCycle = 0;
+        this._marqueeTimer = 0;
+        this._marqueeFrom = 0;
+        this._marqueeTo = 0;
+        this._marqueeStart = 0;
         this._shotting = false;
 
         this._pill = null;
@@ -175,16 +179,18 @@ export class Island {
             GLib.source_remove(this._tickTimer);
             this._tickTimer = 0;
         }
-        for (const timer of [this._morphTimer, this._collapseTimer,
-                             this._marqueeTimer, this._marqueeRetryId]) {
+        for (const timer of [this._morphTimer, this._collapseTimer, this._marqueeTimer]) {
             if (timer)
                 GLib.source_remove(timer);
         }
+        this._marqueeTimer = 0;
         this._morphTimer = 0;
         this._collapseTimer = 0;
-        this._marqueeTimer = 0;
-        this._marqueeRetryId = 0;
         this._miniLyricCycle = 0;
+        this._marqueeTimer = 0;
+        this._marqueeFrom = 0;
+        this._marqueeTo = 0;
+        this._marqueeStart = 0;
 
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
@@ -373,23 +379,34 @@ export class Island {
     // ------------------------------------------------------------ 滚动歌词
 
     _cancelLyricAnim() {
-        for (const timer of [this._marqueeTimer, this._marqueeRetryId]) {
-            if (timer)
-                GLib.source_remove(timer);
+        if (this._marqueeTimer) {
+            GLib.source_remove(this._marqueeTimer);
+            this._marqueeTimer = 0;
         }
-        this._marqueeTimer = 0;
-        this._marqueeRetryId = 0;
         this._miniLyric?.remove_transition('translation-x');
         this._miniLyric?.remove_transition('opacity');
         this._miniLyricCycle = 0;
+        this._marqueeTimer = 0;
+        this._marqueeFrom = 0;
+        this._marqueeTo = 0;
+        this._marqueeStart = 0;
+    }
+
+    /** 收起态·播放中 这个视图当前是否可见（不可见时不要动动画，ease 会立即完成） */
+    _lyricViewVisible() {
+        return this._activeView === this._views['false:playing'] && this._miniLyric?.visible;
     }
 
     /**
-     * 换句：从右侧快速滑入（Apple 灵动岛那种过渡），不从头滚一遍。
-     *   短句 → 滑到居中，静止
-     *   长句 → 先完整显示开头，停稳 3 秒后再连续滚动
+     * 换句：
+     *   短句 → 从右侧滑入并**居中**静止
+     *   长句 → 直接从右侧进入、**立即**向左连续滚动（不等待、不停顿）
      */
     _updateMiniLyric(text) {
+        if (!this._lyricViewVisible()) {
+            this._miniLyricText = '';        // 等视图可见时重新处理
+            return;
+        }
         if (text === this._miniLyricText)
             return;
         this._miniLyricText = text;
@@ -398,12 +415,23 @@ export class Island {
 
         const containerWidth = MARQUEE_W;
         const textWidth = this._measureLyricWidth();
-        const long = textWidth > containerWidth;
-        const targetX = long ? 0 : Math.round((containerWidth - textWidth) / 2);
-        if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS))
-            console.log(`[灵动岛][dbg] 歌词宽度 pango=${textWidth} 可视=${containerWidth} long=${long}`);
-
         this._miniLyric.x = 0;
+
+        if (textWidth > containerWidth) {
+            // 长句：从右侧进入并立即开始滚动
+            this._miniLyric.translation_x = containerWidth + MARQUEE_GAP;
+            this._miniLyric.opacity = 0;
+            this._miniLyric.ease({
+                opacity: 255,
+                duration: 150,
+                mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+            });
+            this._startMarquee();
+            return;
+        }
+
+        // 短句：滑入到居中位置
+        const targetX = Math.round((containerWidth - textWidth) / 2);
         this._miniLyric.translation_x = containerWidth;
         this._miniLyric.opacity = 0;
         this._miniLyric.ease({
@@ -411,22 +439,48 @@ export class Island {
             opacity: 255,
             duration: 240,
             mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-            onComplete: () => {
-                if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS))
-                    console.log(`[灵动岛][dbg] 滑入完成 long=${long}`);
-                if (!long)
-                    return;
-                // 长句：停稳后再连续滚动
-                this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
-                    this._marqueeTimer = 0;
-                    this._startMarquee();
-                    return GLib.SOURCE_REMOVE;
-                });
-            },
         });
     }
 
-    /** 文字真实宽度：用 Pango 布局量（标签自身会被分配宽度钳制，量不准） */
+    /** 连续滚动：定时器逐帧推进（不依赖系统动画设置，也不会被隐藏视图打断） */
+    _startMarquee() {
+        if (!this._lyricViewVisible())
+            return;
+        const containerWidth = MARQUEE_W;
+        const textWidth = this._measureLyricWidth();
+        if (textWidth <= containerWidth)
+            return;
+
+        if (this._marqueeTimer) {
+            GLib.source_remove(this._marqueeTimer);
+            this._marqueeTimer = 0;
+        }
+        this._miniLyricCycle = (this._miniLyricCycle ?? 0) + 1;
+        this._marqueeFrom = containerWidth + MARQUEE_GAP;
+        this._marqueeTo = -textWidth;
+        this._marqueeStart = GLib.get_monotonic_time() / 1e6;
+        this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            const elapsed = GLib.get_monotonic_time() / 1e6 - this._marqueeStart;
+            const total = (this._marqueeFrom - this._marqueeTo) / MARQUEE_SPEED;
+            if (!this._lyricViewVisible()) {
+                this._marqueeTimer = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            if (elapsed >= total) {
+                this._marqueeTimer = 0;
+                // 一圈结束立刻接上下一圈（放到 idle 里，避免同步递归）
+                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this._startMarquee();
+                    return GLib.SOURCE_REMOVE;
+                });
+                return GLib.SOURCE_REMOVE;
+            }
+            this._miniLyric.translation_x = this._marqueeFrom - MARQUEE_SPEED * elapsed;
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    /** 文字真实宽度    /** 文字真实宽度：用 Pango 布局量（标签自身会被分配宽度钳制，量不准） */
     _measureLyricWidth() {
         try {
             const layout = this._miniLyric?.clutter_text?.get_layout();
