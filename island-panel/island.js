@@ -32,6 +32,7 @@ try {
 
 const W_IDLE = 96;
 const W_MUSIC = 320;      // 播放中的收起态：长条胶囊，里面滚动歌词
+const W_PAUSED = 124;     // 暂停时缩回小胶囊（封面 + 静止波形）
 const W_EXPANDED = 424;
 const H_COLLAPSED = 34;
 const H_EXPANDED = 210;
@@ -153,7 +154,7 @@ export class Island {
             });
 
             this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._place(false));
-            this._showView(`${this._expanded}:${this._music !== null}`, 0);
+            this._showView(this._stateKey(), 0);
             console.log(`[灵动岛] 已启用（${this._expanded ? '展开' : '收起'}态，${W_EXPANDED}x${H_EXPANDED}）`);
         } catch (error) {
             // 出错时把自己完整清理掉（包含恢复系统时钟），避免留下半成品
@@ -231,11 +232,14 @@ export class Island {
 
         this._buildMenu();
         this._views = {
-            'false:false': this._buildCollapsedIdle(),
-            'false:true': this._buildCollapsedMusic(),
-            'true:true': this._buildExpandedMusic(),
-            'true:false': this._buildExpandedIdle(),
+            'false:idle': this._buildCollapsedIdle(),
+            'false:playing': this._buildCollapsedMusic(),
+            'false:paused': this._buildCollapsedPaused(),
+            'true:playing': this._buildExpandedMusic(),
+            'true:idle': this._buildExpandedIdle(),
         };
+        // 展开态不区分播放/暂停（只是播放按钮图标不同）
+        this._views['true:paused'] = this._views['true:playing'];
         // 四个视图常驻、只切换可见性：避免在动画过程中增删子节点
         for (const view of Object.values(this._views)) {
             view.visible = false;
@@ -296,6 +300,35 @@ export class Island {
         return box;
     }
 
+    /** 暂停态：小胶囊（封面 + 静止波形），和从前的播放态一样 */
+    _buildCollapsedPaused() {
+        const box = new St.BoxLayout({
+            style_class: 'island-collapsed',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        box.x_expand = true;
+        box.y_expand = true;
+
+        this._pausedCover = new St.Bin({style_class: 'island-cover island-cover-mini'});
+        this._pausedCoverNote = makeLabel('♪', 'island-cover-note');
+        this._pausedCoverNote.x_align = Clutter.ActorAlign.CENTER;
+        this._pausedCoverNote.y_align = Clutter.ActorAlign.CENTER;
+        this._pausedCover.set_child(this._pausedCoverNote);
+        box.add_child(this._pausedCover);
+
+        const bars = new St.BoxLayout({style_class: 'island-eq', y_align: Clutter.ActorAlign.CENTER});
+        const levels = [0.34, 0.58, 0.42, 0.66];
+        for (const level of levels) {
+            const bar = new St.Widget({style_class: 'island-eq-bar'});
+            bar.set_size(3, Math.max(3, Math.round(14 * level)));
+            bar.y_align = Clutter.ActorAlign.END;
+            bars.add_child(bar);
+        }
+        box.add_child(bars);
+        return box;
+    }
+
     _buildCollapsedMusic() {
         const box = new St.BoxLayout({style_class: 'island-collapsed'});
         box.x_expand = true;
@@ -332,6 +365,15 @@ export class Island {
     }
 
     // ------------------------------------------------------------ 滚动歌词
+
+    _stopMarquee() {
+        this._marqueeStartId && GLib.source_remove(this._marqueeStartId);
+        this._marqueePauseId && GLib.source_remove(this._marqueePauseId);
+        this._marqueeStartId = 0;
+        this._marqueePauseId = 0;
+        this._miniLyric?.remove_transition('x');
+        this._miniLyricText = '';
+    }
 
     _updateMiniLyric(text) {
         if (text === this._miniLyricText)
@@ -542,11 +584,26 @@ export class Island {
 
     // ------------------------------------------------------------ 尺寸 / 动画
 
+    /** 当前该显示哪个状态：idle（没播放）/ playing（播放中）/ paused（暂停） */
+    _stateKind() {
+        if (!this._music)
+            return 'idle';
+        return this._music.status === 'Playing' ? 'playing' : 'paused';
+    }
+
+    _stateKey() {
+        return `${this._expanded}:${this._stateKind()}`;
+    }
+
     _sizeFor(key) {
-        const [expanded, music] = key.split(':').map(part => part === 'true');
-        if (expanded)
+        const [expanded, kind] = key.split(':');
+        if (expanded === 'true')
             return [W_EXPANDED, H_EXPANDED];
-        return [music ? W_MUSIC : W_IDLE, H_COLLAPSED];
+        if (kind === 'playing')
+            return [W_MUSIC, H_COLLAPSED];
+        if (kind === 'paused')
+            return [W_PAUSED, H_COLLAPSED];
+        return [W_IDLE, H_COLLAPSED];
     }
 
     _pillPosition(key, width, height) {
@@ -577,6 +634,9 @@ export class Island {
             return;
         }
 
+        if (key !== 'false:playing')
+            this._stopMarquee();
+
         const fade = Math.min(90, duration);
         if (old && duration > 0)
             old.ease({opacity: 0, duration: fade});
@@ -605,8 +665,8 @@ export class Island {
         const view = this._views[key];
         if (!view)
             return;
-        for (const [name, candidate] of Object.entries(this._views))
-            candidate.visible = name === key;
+        for (const candidate of new Set(Object.values(this._views)))
+            candidate.visible = candidate === view;
         view.opacity = 0;
         this._activeView = view;
     }
@@ -633,7 +693,7 @@ export class Island {
 
     _expand(expanded) {
         this._expanded = expanded;
-        this._showView(`${expanded}:${this._music !== null}`);
+        this._showView(this._stateKey());
     }
 
     _scheduleCollapse(delay = COLLAPSE_DELAY_MS) {
@@ -779,8 +839,9 @@ export class Island {
             this._miniLyric?.set_text('');
         }
 
-        if (hadMusic !== (music !== null))
-            this._showView(`${this._expanded}:${music !== null}`);
+        const key = this._stateKey();
+        if (hadMusic !== (music !== null) || key !== this._viewKey)
+            this._showView(key);
     }
 
     _applyLyrics(lines) {
@@ -789,10 +850,11 @@ export class Island {
 
     _applyCover(path) {
         const uri = path ? GLib.filename_to_uri(path, null) : null;
-        for (const bin of [this._cover, this._miniCover]) {
+        for (const bin of [this._cover, this._miniCover, this._pausedCover]) {
             if (!bin)
                 continue;
-            const note = bin === this._cover ? this._coverNote : this._miniCoverNote;
+            const note = bin === this._cover ? this._coverNote
+                : bin === this._miniCover ? this._miniCoverNote : this._pausedCoverNote;
             if (uri) {
                 bin.set_style(`background-image: url("${uri}");`);
                 note.visible = false;
@@ -876,7 +938,8 @@ export class Island {
             const line = lineAt(this._lines, position) ||
                 [this._music.title, this._music.artist].filter(Boolean).join(' · ');
             setText(this._lyric, line);
-            this._updateMiniLyric(line);
+            if (this._music.status === 'Playing')
+                this._updateMiniLyric(line);
 
             const playing = this._music.status === 'Playing';
             this._eqPhase += playing ? 0.35 : 0;

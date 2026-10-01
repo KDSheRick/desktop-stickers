@@ -112,7 +112,8 @@ A pure-black capsule centered at the top: **hover to expand, move away → colla
 ~1.5 s, click to pin it open**.
 
 - Collapsed: time when idle; while playing it becomes a **long capsule** with the
-  current lyric scrolling inside it
+  current lyric scrolling inside it; paused shrinks back to the small pill
+  (cover + static EQ bars)
 - Expanded (playing): cover / title / artist / draggable progress bar / prev · play · next /
   current lyric
 - Expanded (idle): large clock + date, today's cost / tokens / total, 7-day mini bar chart
