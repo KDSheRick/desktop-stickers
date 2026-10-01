@@ -364,6 +364,13 @@ export class Island {
         this._marqueeBox.add_child(this._miniLyric);
         box.add_child(this._marqueeBox);
 
+        // 隐藏探针：不参与分配 → 内部 Pango 布局不受宽度约束，能量到真实文字宽度
+        this._lyricProbe = new St.Label({text: '', style_class: 'island-mini-lyric'});
+        this._lyricProbe.clutter_text.single_line_mode = true;
+        this._lyricProbe.visible = false;
+        box.add_child(this._lyricProbe);
+
+
         const bars = new St.BoxLayout({style_class: 'island-eq', y_align: Clutter.ActorAlign.CENTER});
         this._eqBars = [];
         for (let i = 0; i < 4; i++) {
@@ -379,17 +386,16 @@ export class Island {
     // ------------------------------------------------------------ 滚动歌词
 
     _cancelLyricAnim() {
-        if (this._marqueeTimer) {
-            GLib.source_remove(this._marqueeTimer);
-            this._marqueeTimer = 0;
+        for (const timer of [this._marqueeTimer, this._measureId]) {
+            if (timer)
+                GLib.source_remove(timer);
         }
+        this._marqueeTimer = 0;
+        this._measureId = 0;
+        this._lyricToken = (this._lyricToken ?? 0) + 1;
         this._miniLyric?.remove_transition('translation-x');
         this._miniLyric?.remove_transition('opacity');
         this._miniLyricCycle = 0;
-        this._marqueeTimer = 0;
-        this._marqueeFrom = 0;
-        this._marqueeTo = 0;
-        this._marqueeStart = 0;
     }
 
     /** 收起态·播放中 这个视图当前是否可见（不可见时不要动动画，ease 会立即完成） */
@@ -398,9 +404,7 @@ export class Island {
     }
 
     /**
-     * 换句：
-     *   短句 → 从右侧滑入并**居中**静止
-     *   长句 → 直接从右侧进入、**立即**向左连续滚动（不等待、不停顿）
+     * 换句：先**居中固定**显示；如果这行放不下，停 1 秒后从居中位置向左滚动。
      */
     _updateMiniLyric(text) {
         if (!this._lyricViewVisible()) {
@@ -412,107 +416,87 @@ export class Island {
         this._miniLyricText = text;
         this._cancelLyricAnim();
         this._miniLyric.set_text(text);
-
-        const containerWidth = MARQUEE_W;
-        const textWidth = this._measureLyricWidth();
         this._miniLyric.x = 0;
+        this._miniLyric.translation_x = 0;
+        this._miniLyric.opacity = 255;
 
-        if (textWidth > containerWidth) {
-            // 长句：从右侧进入并立即开始滚动
-            this._miniLyric.translation_x = containerWidth + MARQUEE_GAP;
-            this._miniLyric.opacity = 0;
-            this._miniLyric.ease({
-                opacity: 255,
-                duration: 150,
-                mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-            });
-            this._startMarquee();
-            return;
-        }
-
-        // 短句：滑入到居中位置
-        const targetX = Math.round((containerWidth - textWidth) / 2);
-        this._miniLyric.translation_x = containerWidth;
-        this._miniLyric.opacity = 0;
-        this._miniLyric.ease({
-            translation_x: targetX,
-            opacity: 255,
-            duration: 240,
-            mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+        // 等一帧再量（刚 set_text 时布局可能还没更新）
+        const token = ++this._lyricToken;
+        this._measureId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            this._measureId = 0;
+            if (token === this._lyricToken)
+                this._layoutLyric();
+            return GLib.SOURCE_REMOVE;
         });
     }
 
-    /** 连续滚动：定时器逐帧推进（不依赖系统动画设置，也不会被隐藏视图打断） */
-    _startMarquee() {
+    /** 量宽 → 居中摆放；太长则停 1 秒后开始滚动 */
+    _layoutLyric() {
         if (!this._lyricViewVisible())
             return;
-        const containerWidth = MARQUEE_W;
         const textWidth = this._measureLyricWidth();
-        if (textWidth <= containerWidth)
+        this._miniLyric.translation_x = Math.round((MARQUEE_W - textWidth) / 2);
+        if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS))
+            console.log(`[灵动岛][dbg] 歌词 "${this._miniLyricText}" 宽=${textWidth} ` +
+                `可视=${MARQUEE_W} 居中=${this._miniLyric.translation_x}`);
+        if (textWidth <= MARQUEE_W)
             return;
+        this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            this._marqueeTimer = 0;
+            this._startMarquee(false);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
 
+    /** 滚动：fromRight=false 时从当前位置（居中）开始；之后的圈从右侧进入 */
+    _startMarquee(fromRight) {
+        if (!this._lyricViewVisible())
+            return;
+        const textWidth = this._measureLyricWidth();
+        if (textWidth <= MARQUEE_W)
+            return;
         if (this._marqueeTimer) {
             GLib.source_remove(this._marqueeTimer);
             this._marqueeTimer = 0;
         }
         this._miniLyricCycle = (this._miniLyricCycle ?? 0) + 1;
-        this._marqueeFrom = containerWidth + MARQUEE_GAP;
+        this._marqueeFrom = fromRight ? MARQUEE_W + MARQUEE_GAP : this._miniLyric.translation_x;
         this._marqueeTo = -textWidth;
         this._marqueeStart = GLib.get_monotonic_time() / 1e6;
-        this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
-            const elapsed = GLib.get_monotonic_time() / 1e6 - this._marqueeStart;
-            const total = (this._marqueeFrom - this._marqueeTo) / MARQUEE_SPEED;
-            if (!this._lyricViewVisible()) {
-                this._marqueeTimer = 0;
-                return GLib.SOURCE_REMOVE;
-            }
-            if (elapsed >= total) {
-                this._marqueeTimer = 0;
-                // 一圈结束立刻接上下一圈（放到 idle 里，避免同步递归）
-                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-                    this._startMarquee();
-                    return GLib.SOURCE_REMOVE;
-                });
-                return GLib.SOURCE_REMOVE;
-            }
-            this._miniLyric.translation_x = this._marqueeFrom - MARQUEE_SPEED * elapsed;
-            return GLib.SOURCE_CONTINUE;
-        });
+        this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => this._marqueeTick());
     }
 
-    /** 文字真实宽度    /** 文字真实宽度：用 Pango 布局量（标签自身会被分配宽度钳制，量不准） */
-    _measureLyricWidth() {
-        try {
-            const layout = this._miniLyric?.clutter_text?.get_layout();
-            if (layout) {
-                const [width] = layout.get_pixel_size();
-                if (width > 0)
-                    return width;
-            }
-        } catch {
-            // 退回 Clutter 的测量
+    _marqueeTick() {
+        if (!this._lyricViewVisible()) {
+            this._marqueeTimer = 0;
+            return GLib.SOURCE_REMOVE;
         }
-        return this._miniLyric?.get_preferred_width(-1)[1] ?? 0;
+        const elapsed = GLib.get_monotonic_time() / 1e6 - this._marqueeStart;
+        const total = (this._marqueeFrom - this._marqueeTo) / MARQUEE_SPEED;
+        if (elapsed >= total) {
+            this._marqueeTimer = 0;
+            // 下一圈从右侧接上；用 idle 避免同步递归
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._startMarquee(true);
+                return GLib.SOURCE_REMOVE;
+            });
+            return GLib.SOURCE_REMOVE;
+        }
+        this._miniLyric.translation_x = this._marqueeFrom - MARQUEE_SPEED * elapsed;
+        return GLib.SOURCE_CONTINUE;
     }
 
-    /** 连续滚动：一圈滚完立刻从右侧接上，中间不停顿 */
-    _startMarquee() {
-        const containerWidth = MARQUEE_W;
-        const textWidth = this._measureLyricWidth();
-        if (containerWidth <= 0 || textWidth <= containerWidth)
-            return;
-        const gap = 28;                       // 两次之间的间隔
-        const distance = containerWidth + textWidth + gap;
-        const speed = 45;                     // px/s
-        this._miniLyricCycle = (this._miniLyricCycle ?? 0) + 1;
-        this._miniLyric.x = 0;
-        this._miniLyric.translation_x = containerWidth + gap;
-        this._miniLyric.ease({
-            translation_x: -textWidth,
-            duration: Math.max(3000, Math.round(distance / speed * 1000)),
-            mode: Clutter.AnimationMode.LINEAR,
-            onComplete: () => this._startMarquee(),
-        });
+    /** 文字真实宽度：用隐藏探针量（可见标签的布局会被固定宽度约束，量不准） */
+    _measureLyricWidth() {
+        if (!this._lyricProbe)
+            return 0;
+        try {
+            if (this._lyricProbe.get_text() !== this._miniLyricText)
+                this._lyricProbe.set_text(this._miniLyricText);
+            return this._lyricProbe.get_preferred_width(-1)[1];
+        } catch {
+            return 0;
+        }
     }
 
     _buildExpandedMusic() {
