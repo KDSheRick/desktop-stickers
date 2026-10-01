@@ -126,16 +126,72 @@ def xid_of(window) -> int:
         return 0
 
 
+# ---------------------------------------------------------------- EWMH 结构体
+#
+# 让悬浮窗（灵动岛）可以「置顶 / 不进任务栏 / 不抢键盘焦点」，并读取工作区。
+# 都是尽力而为：失败时静默忽略，不影响窗口主体功能。
+
+_XA_CARDINAL = 6
+_CLIENT_MESSAGE = 33
+_SUBSTRUCTURE_NOTIFY = 1 << 19
+_SUBSTRUCTURE_REDIRECT = 1 << 20
+_INPUT_HINT = 1
+
+
+class _XClientMessage(ctypes.Structure):
+    """XClientMessageEvent 的有效字段（XEvent 实际 192 字节，用缓冲区兜底）。"""
+
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("serial", ctypes.c_ulong),
+        ("send_event", ctypes.c_int),
+        ("display", ctypes.c_void_p),
+        ("window", ctypes.c_ulong),
+        ("message_type", ctypes.c_ulong),
+        ("format", ctypes.c_int),
+        ("data", ctypes.c_long * 5),
+    ]
+
+
+class _XWMHints(ctypes.Structure):
+    """XWMHints（Xlib 结构，只用到 input 标志）。"""
+
+    _fields_ = [
+        ("flags", ctypes.c_long),
+        ("input", ctypes.c_int),
+        ("initial_state", ctypes.c_int),
+        ("icon_pixmap", ctypes.c_ulong),
+        ("icon_window", ctypes.c_ulong),
+        ("icon_x", ctypes.c_int),
+        ("icon_y", ctypes.c_int),
+        ("icon_mask", ctypes.c_ulong),
+        ("window_group", ctypes.c_ulong),
+    ]
+
+
+class _XRectangle(ctypes.Structure):
+    """XRectangle（XShape 输入区域用）。"""
+
+    _fields_ = [
+        ("x", ctypes.c_short),
+        ("y", ctypes.c_short),
+        ("width", ctypes.c_ushort),
+        ("height", ctypes.c_ushort),
+    ]
+
+
 # ---------------------------------------------------------------- 移动器
 
 class X11Mover:
-    """通过 libX11 移动窗口、读取几何信息。"""
+    """通过 libX11 移动窗口、读取几何信息，并做少量 EWMH 设置。"""
 
     def __init__(self) -> None:
         self.ok = False
         self._lib = None
         self._display = None
         self._root = 0
+        self._atoms: dict[str, int] = {}
+        self._xext = None
         try:
             library = ctypes.util.find_library("X11")
             if not library:
@@ -168,6 +224,36 @@ class X11Mover:
                 ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint),
                 ctypes.POINTER(ctypes.c_uint),
             ]
+            # EWMH / WM 辅助：置顶、窗口类型、不抢焦点、读工作区
+            lib.XInternAtom.restype = ctypes.c_ulong
+            lib.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+            lib.XGetWindowProperty.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.c_long, ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
+                ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+                ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+            ]
+            lib.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                       ctypes.c_long, ctypes.c_void_p]
+            lib.XChangeProperty.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+            lib.XSetWMHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p]
+            lib.XGetWMHints.restype = ctypes.c_void_p
+            lib.XGetWMHints.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            lib.XFree.argtypes = [ctypes.c_void_p]
+
+            # XShape（设置输入区域）：在 libXext 里
+            xext_name = ctypes.util.find_library("Xext")
+            if xext_name:
+                xext = ctypes.CDLL(xext_name)
+                xext.XShapeCombineRectangles.argtypes = [
+                    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                    ctypes.c_int, ctypes.c_int,
+                    ctypes.POINTER(_XRectangle), ctypes.c_int,
+                    ctypes.c_int, ctypes.c_int]
+                self._xext = xext
 
             self._lib = lib
             self._display = display
@@ -211,3 +297,112 @@ class X11Mover:
             return
         self._lib.XMoveWindow(self._display, xid, int(x), int(y))
         self._lib.XSync(self._display, False)
+
+    # ------------------------------------------------------------ EWMH 辅助
+
+    def _atom(self, name: str) -> int:
+        if not self.ok:
+            return 0
+        if name not in self._atoms:
+            self._atoms[name] = int(self._lib.XInternAtom(self._display, name.encode(), False))
+        return self._atoms[name]
+
+    def workarea(self) -> tuple[int, int, int, int] | None:
+        """读取 _NET_WORKAREA 第一块（x, y, w, h，已避开 GNOME 顶栏 / 停靠栏）。"""
+        if not self.ok:
+            return None
+        actual_type = ctypes.c_ulong()
+        actual_format = ctypes.c_int()
+        nitems = ctypes.c_ulong()
+        after = ctypes.c_ulong()
+        prop = ctypes.POINTER(ctypes.c_ubyte)()
+        status = self._lib.XGetWindowProperty(
+            self._display, self._root, self._atom("_NET_WORKAREA"),
+            0, 4, False, _XA_CARDINAL,
+            ctypes.byref(actual_type), ctypes.byref(actual_format),
+            ctypes.byref(nitems), ctypes.byref(after), ctypes.byref(prop))
+        if status != 0 or not prop:
+            return None
+        try:
+            if nitems.value < 4:
+                return None
+            values = ctypes.cast(prop, ctypes.POINTER(ctypes.c_ulong))
+            return (int(values[0]), int(values[1]), int(values[2]), int(values[3]))
+        finally:
+            self._lib.XFree(prop)
+
+    def _send_state(self, xid: int, action: int, atoms: list[int]) -> None:
+        """发送 _NET_WM_STATE 客户端消息（action：0 移除 / 1 添加 / 2 切换）。"""
+        if not self.ok or not xid:
+            return
+        buf = ctypes.create_string_buffer(192)  # XEvent 大小，防止 Xlib 读越界
+        event = ctypes.cast(buf, ctypes.POINTER(_XClientMessage)).contents
+        event.type = _CLIENT_MESSAGE
+        event.serial = 0
+        event.send_event = 1
+        event.display = self._display
+        event.window = xid
+        event.message_type = self._atom("_NET_WM_STATE")
+        event.format = 32
+        event.data[0] = action
+        event.data[1] = atoms[0] if atoms else 0
+        event.data[2] = atoms[1] if len(atoms) > 1 else 0
+        event.data[3] = 1  # 来源：普通应用
+        self._lib.XSendEvent(self._display, self._root, False,
+                             _SUBSTRUCTURE_NOTIFY | _SUBSTRUCTURE_REDIRECT,
+                             ctypes.byref(event))
+        self._lib.XFlush(self._display)
+
+    def set_above(self, xid: int, above: bool = True) -> None:
+        """窗口置顶（_NET_WM_STATE_ABOVE）。"""
+        self._send_state(xid, 1 if above else 0, [self._atom("_NET_WM_STATE_ABOVE")])
+
+    def skip_taskbar(self, xid: int) -> None:
+        """不出现在任务栏 / 工作区切换器。"""
+        self._send_state(xid, 1, [self._atom("_NET_WM_STATE_SKIP_TASKBAR"),
+                                  self._atom("_NET_WM_STATE_SKIP_PAGER")])
+
+    def set_window_type(self, xid: int, kind: str = "dock") -> None:
+        """设置 _NET_WM_WINDOW_TYPE（dock 让窗口默认浮在普通窗口之上，且不抢焦点）。"""
+        if not self.ok or not xid:
+            return
+        atom = self._atom("_NET_WM_WINDOW_TYPE_" + kind.upper())
+        value = ctypes.c_ulong(atom)
+        self._lib.XChangeProperty(
+            self._display, xid, self._atom("_NET_WM_WINDOW_TYPE"), self._atom("ATOM"),
+            32, 0, ctypes.byref(value), 1)
+        self._lib.XFlush(self._display)
+
+    def set_input_hint(self, xid: int, enabled: bool = False) -> None:
+        """WM_HINTS 的 input 标志：False = 点击窗口时 WM 不把键盘焦点给它。"""
+        if not self.ok or not xid:
+            return
+        existing = self._lib.XGetWMHints(self._display, xid)
+        hints = _XWMHints()
+        if existing:
+            hints = ctypes.cast(existing, ctypes.POINTER(_XWMHints)).contents
+        hints.flags = hints.flags | _INPUT_HINT
+        hints.input = 1 if enabled else 0
+        self._lib.XSetWMHints(self._display, xid, ctypes.byref(hints))
+        if existing:
+            self._lib.XFree(existing)
+        self._lib.XFlush(self._display)
+
+    def set_input_shape(self, xid: int, rects: list[tuple[int, int, int, int]]) -> None:
+        """XShape 输入区域：只有列出的矩形接收鼠标事件，其余区域点击穿透。
+
+        直接调 libXext 而不是 Gdk.Surface.set_input_region，
+        因为后者在没装 python3-gi-cairo 时不可用（PyGObject 缺 cairo 外部类型）。
+        """
+        if not self.ok or not xid or self._xext is None:
+            return
+        array = (_XRectangle * max(1, len(rects)))()
+        for index, (x, y, width, height) in enumerate(rects):
+            array[index].x = int(round(x))
+            array[index].y = int(round(y))
+            array[index].width = max(1, int(round(width)))
+            array[index].height = max(1, int(round(height)))
+        # ShapeInput=2, ShapeSet=0, Unsorted=0
+        self._xext.XShapeCombineRectangles(
+            self._display, xid, 2, 0, 0, array, len(rects), 0, 0)
+        self._lib.XFlush(self._display)

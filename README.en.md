@@ -97,6 +97,43 @@ python3 lyrics_tray.py --toggle   # switch
 - The on/off state is remembered and respected by autostart
 - Requires Ubuntu's `ubuntu-appindicators` extension (enabled by default)
 
+## Dynamic Island (experimental prototype)
+
+> Branch `feature/dynamic-island`: a macOS Dynamic Island–style floating capsule.
+> **This is a GTK4 prototype** to settle the look & interaction first; a GNOME Shell
+> extension port is planned next (native always-on-top, smoother Clutter animations).
+
+![Dynamic Island](docs/island.png)
+
+A pure-black capsule centered at the top: **hover to expand, moves away → collapses
+after ~1.5 s, click to pin it open**.
+
+- Collapsed: shows the time when idle; album thumbnail + animated EQ bars while playing
+- Expanded (playing): cover / title / artist / draggable progress bar / prev · play · next /
+  current lyric, with clock, today's spend and balances in the footer
+- Expanded (idle): large clock + date, today's cost / tokens / total, a 7-day mini bar chart
+  and provider balances
+
+```bash
+python3 island.py                    # normal mode (follows your real player)
+python3 island.py --demo             # demo data, no player needed
+python3 island.py --state expanded-music --snapshot docs/island.png   # render a screenshot
+```
+
+Implementation notes:
+
+- The window is **fixed-size and transparent**; the capsule morphs inside it frame by
+  frame (~60 fps). Each frame an XShape input region is shrunk to the capsule, so
+  **clicks/hover outside the capsule pass through to the desktop**
+- Positioned top-center below the panel via XWayland, and best-effort
+  always-on-top / skip-taskbar / no-keyboard-focus (`_NET_WM_STATE_ABOVE` +
+  `_NET_WM_WINDOW_TYPE_DOCK`, since GTK4 has no keep-above API)
+- Reuses the existing modules: MPRIS sampling, lyric/cover cache, API usage & balances
+  (shared config with the stickers)
+
+> Known limitation: always-on-top for X11 clients under a Wayland session is best-effort;
+> in some fullscreen cases it may still be covered — the Shell extension port will fix this.
+
 ## Autostart & blur
 
 ```bash

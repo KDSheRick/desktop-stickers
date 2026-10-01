@@ -210,6 +210,38 @@ bash ~/desktop-stickers/enable-blur.sh
 > Activities 旁）：`bash lyrics-panel/install-lyrics-panel.sh` 安装后需要**注销重新登录**一次
 > 才会加载。两种方式二选一即可，一般推荐上面的插件方案。
 
+## 灵动岛（实验性原型）
+
+> 分支 `feature/dynamic-island`：macOS Dynamic Island 风格的桌面悬浮胶囊。
+> **当前是 GTK4 原型**，用于先确定外观和交互；后续计划移植成 GNOME Shell 扩展
+> （原生置顶、Clutter 动画更顺滑）。
+
+![灵动岛](docs/island.png)
+
+顶部居中、纯黑圆角胶囊：**悬停展开、移开约 1.5 秒自动收起，点击可以「钉住」**。
+
+- 收起态：无播放时显示时间；播放时显示迷你封面 + 跳动波形
+- 展开态（播放中）：封面 / 歌名 / 歌手 / 可拖动进度条 / 上一曲 · 播放 · 下一曲 / 当前歌词
+  ，底栏显示时钟与今日花费、余额
+- 展开态（闲置）：大时钟 + 日期，右侧今日花费 / tokens / 累计，以及近 7 天柱状图与厂商余额
+
+```bash
+python3 island.py                    # 正常模式（跟随真实播放器）
+python3 island.py --demo             # 演示模式：假音乐 + 假数据，方便调样式
+python3 island.py --state expanded-music --snapshot docs/island.png   # 渲染截图（写文档用）
+```
+
+实现说明：
+
+- 窗口是**固定大小的透明窗**，胶囊在窗口内逐帧变形（约 60fps）；每帧用 XShape
+  把窗口输入区域收成胶囊本身，因此**胶囊之外的点击/悬停会穿透到桌面**
+- 通过 XWayland 定位到顶栏正下方居中，并尽力实现「置顶 / 不进任务栏 / 不抢键盘焦点」
+  （GTK4 没有置顶 API，这里用 `_NET_WM_STATE_ABOVE` + `_NET_WM_WINDOW_TYPE_DOCK`）
+- 复用现有模块：MPRIS 采样、歌词 / 封面缓存、API 用量与余额，与贴纸共用同一份配置
+
+> 已知限制：Wayland 会话下 X11 客户端的置顶是「尽力而为」，个别全屏场景可能仍被盖住；
+> 移植成 Shell 扩展后会彻底解决（这也是后续计划）。
+
 ## 毛玻璃效果说明
 
 - 每张贴纸窗口的透明度、圆角、阴影、描边都在 `style.css` 调整
@@ -331,6 +363,8 @@ desktop-stickers/
 ├── positioner.py         # X11 窗口定位与位置记忆
 ├── lyrics.py             # 歌词获取解析（网易云优先，lrclib 兜底）
 ├── lyrics_tray.py        # 顶栏歌词插件（独立进程，可单独启停）
+├── island.py             # 灵动岛原型（实验性分支：悬浮胶囊，GTK4）
+├── island.css            # 灵动岛样式（纯黑胶囊 / 白色文字）
 ├── covers.py             # 专辑封面下载与顶栏图标位图
 ├── recent.py             # 「最近使用文件」解析
 ├── style.css             # 毛玻璃主题（颜色 / 圆角 / 阴影）
