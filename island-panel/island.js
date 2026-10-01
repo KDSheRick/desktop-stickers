@@ -352,13 +352,17 @@ export class Island {
         this._miniCover.set_child(this._miniCoverNote);
         box.add_child(this._miniCover);
 
-        // 滚动歌词：外面一层裁剪容器，里面一条不换行的文字
-        this._marqueeBox = new St.Widget({style_class: 'island-marquee', clip_to_allocation: true, x_expand: true});
+        // 滚动歌词：裁剪容器（BinLayout）+ 居中对齐的标签。
+        // 居中交给布局做（精确），滚动用 translation-x（不受布局影响）。
+        this._marqueeBox = new St.Widget({
+            style_class: 'island-marquee',
+            clip_to_allocation: true,
+            x_expand: true,
+        });
         this._marqueeBox.y_align = Clutter.ActorAlign.CENTER;
+        // 标签保持自然宽度（内部布局不被约束），位置/滚动全部用 translation-x 控制
         this._miniLyric = new St.Label({text: '', style_class: 'island-mini-lyric'});
         this._miniLyric.clutter_text.single_line_mode = true;
-        // 固定成可视区宽度：否则标签的首选宽度会把裁剪容器一起撑大
-        this._miniLyric.set_width(MARQUEE_W);
         this._miniLyric.y_align = Clutter.ActorAlign.CENTER;
         this._miniLyricText = '';
         this._marqueeBox.add_child(this._miniLyric);
@@ -415,10 +419,11 @@ export class Island {
             return;
         this._miniLyricText = text;
         this._cancelLyricAnim();
+        // 先隐藏：等下一帧量好宽度、摆到正确位置再显示，避免「先左对齐再跳」的一帧
+        this._miniLyric.opacity = 0;
         this._miniLyric.set_text(text);
         this._miniLyric.x = 0;
         this._miniLyric.translation_x = 0;
-        this._miniLyric.opacity = 255;
 
         // 等一帧再量（刚 set_text 时布局可能还没更新）
         const token = ++this._lyricToken;
@@ -430,16 +435,29 @@ export class Island {
         });
     }
 
-    /** 量宽 → 居中摆放；太长则停 1 秒后开始滚动 */
+    /**
+     * 量宽 → 居中摆放 → 显示；太长则停 1 秒后从**居中位置**开始向左滚。
+     * 短句直接用标签的实际宽度（精确）；长句用探针测（探针字号偏大，误差只影响滚动距离）。
+     */
     _layoutLyric() {
         if (!this._lyricViewVisible())
             return;
-        const textWidth = this._measureLyricWidth();
-        this._miniLyric.translation_x = Math.round((MARQUEE_W - textWidth) / 2);
+        const boxWidth = this._marqueeBox?.width || MARQUEE_W;
+        const labelWidth = this._miniLyric?.width ?? 0;
+        const measured = this._measureLyricWidth();
+        // 长短判断用探针：标签的分配宽度会被容器夹住，永远「放得下」
+        const long = measured > boxWidth;
+        // 居中：短句用标签实际宽度（精确），长句用探针（只影响滚动距离的精度）
+        const textWidth = long ? measured : labelWidth;
+
+        this._lyricTextWidth = textWidth;
+        this._miniLyric.x = 0;
+        this._miniLyric.translation_x = Math.round((boxWidth - textWidth) / 2);
+        this._miniLyric.opacity = 255;      // 摆好位置再显示
         if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS))
-            console.log(`[灵动岛][dbg] 歌词 "${this._miniLyricText}" 宽=${textWidth} ` +
-                `可视=${MARQUEE_W} 居中=${this._miniLyric.translation_x}`);
-        if (textWidth <= MARQUEE_W)
+            console.log(`[灵动岛][dbg] 歌词 "${this._miniLyricText}" 标签宽=${labelWidth} 探针=${measured} ` +
+                `采用=${textWidth} 容器=${boxWidth} 偏移=${this._miniLyric.translation_x} long=${long}`);
+        if (!long)
             return;
         this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
             this._marqueeTimer = 0;
@@ -452,15 +470,16 @@ export class Island {
     _startMarquee(fromRight) {
         if (!this._lyricViewVisible())
             return;
-        const textWidth = this._measureLyricWidth();
-        if (textWidth <= MARQUEE_W)
+        const textWidth = this._lyricTextWidth || this._measureLyricWidth();
+        const boxWidth = this._marqueeBox?.width || MARQUEE_W;
+        if (textWidth <= boxWidth)
             return;
         if (this._marqueeTimer) {
             GLib.source_remove(this._marqueeTimer);
             this._marqueeTimer = 0;
         }
         this._miniLyricCycle = (this._miniLyricCycle ?? 0) + 1;
-        this._marqueeFrom = fromRight ? MARQUEE_W + MARQUEE_GAP : this._miniLyric.translation_x;
+        this._marqueeFrom = fromRight ? boxWidth + MARQUEE_GAP : this._miniLyric.translation_x;
         this._marqueeTo = -textWidth;
         this._marqueeStart = GLib.get_monotonic_time() / 1e6;
         this._marqueeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => this._marqueeTick());
@@ -475,7 +494,6 @@ export class Island {
         const total = (this._marqueeFrom - this._marqueeTo) / MARQUEE_SPEED;
         if (elapsed >= total) {
             this._marqueeTimer = 0;
-            // 下一圈从右侧接上；用 idle 避免同步递归
             GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                 this._startMarquee(true);
                 return GLib.SOURCE_REMOVE;
@@ -486,14 +504,27 @@ export class Island {
         return GLib.SOURCE_CONTINUE;
     }
 
-    /** 文字真实宽度：用隐藏探针量（可见标签的布局会被固定宽度约束，量不准） */
+    /** 主题缩放（可能是 1.25 这种小数） */
+    _themeScale() {
+        try {
+            return St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
+        } catch {
+            return 1;
+        }
+    }
+
+    /**
+     * 文字真实宽度（逻辑像素）。
+     * 用隐藏探针量：可见标签的内部分布局会被固定宽度约束，量出来永远等于容器宽度；
+     * 探针不参与分配，但返回的是**设备像素**，要除以主题缩放。
+     */
     _measureLyricWidth() {
         if (!this._lyricProbe)
             return 0;
         try {
             if (this._lyricProbe.get_text() !== this._miniLyricText)
                 this._lyricProbe.set_text(this._miniLyricText);
-            return this._lyricProbe.get_preferred_width(-1)[1];
+            return this._lyricProbe.get_preferred_width(-1)[1] / this._themeScale();
         } catch {
             return 0;
         }

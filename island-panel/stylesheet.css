@@ -66,6 +66,8 @@
 
 .island-marquee {
   min-height: 16px;
+  /* 与 island.js 的 MARQUEE_W 保持一致：限制裁剪范围，防止文字把容器撑大 */
+  max-width: 238px;
 }
 
 .island-mini {
