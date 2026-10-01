@@ -23,6 +23,7 @@ gi.require_version("Gsk", "4.0")
 gi.require_version("Graphene", "1.0")
 from gi.repository import Gdk, Gio, GLib, Graphene, Gsk, Gtk, Pango
 
+import api_usage
 import covers
 import recent
 from collectors import fmt_clock, fmt_duration
@@ -45,6 +46,7 @@ MUSIC_SEEK_HEIGHT = 16
 
 # GNOME 调色板
 BLUE = (0.208, 0.518, 0.894)     # #3584e4
+ORANGE = (0.902, 0.380, 0.000)   # #e66100
 PURPLE = (0.569, 0.255, 0.675)   # #9141ac
 TEAL = (0.129, 0.565, 0.643)     # #2190a4
 GREEN = (0.200, 0.820, 0.478)    # #33d17a
@@ -1107,6 +1109,123 @@ class RecentFileRow(Gtk.Box):
         popover.set_child(box)
         popover.set_parent(self)
         return popover
+
+
+class ApiCard(Card):
+    """API 用量卡片：OpenCode 花费 / token + 各厂商余额（厂商可配置）。"""
+
+    def __init__(self, width: int = WIDE_WIDTH):
+        super().__init__("API 用量", ORANGE, width=width)
+        self._grid = Gtk.Grid(column_spacing=10, row_spacing=6)
+        self.append(self._grid)
+        self._rows: dict[str, Gtk.Label] = {}
+        self._provider_key: tuple = ()
+        self._providers: list[dict] = []
+        self._fetching = False
+        self._token = 0
+        self._rebuild()
+
+    # ------------------------------------------------------------ 对外接口
+
+    def refresh(self, settings_values: dict | None = None) -> None:
+        self._render_usage(api_usage.opencode_usage())
+
+        providers = api_usage.load_providers(settings_values or {})
+        ids = tuple(provider["id"] for provider in providers)
+        if ids != self._provider_key:
+            self._provider_key = ids
+            self._providers = providers
+            self._token += 1
+            self._rebuild()
+            self._spawn_fetch(force=True)
+        elif api_usage.balances_expired():
+            self._spawn_fetch(force=False)
+
+        self._render_balances(api_usage.balances_cached())
+
+    # ------------------------------------------------------------ 渲染
+
+    def _rebuild(self) -> None:
+        child = self._grid.get_first_child()
+        while child is not None:
+            self._grid.remove(child)
+            child = self._grid.get_first_child()
+        self._rows = {}
+
+        def add_row(row: int, name: str) -> Gtk.Label:
+            label = Gtk.Label(label=name)
+            label.add_css_class("row-label")
+            label.set_halign(Gtk.Align.START)
+            value = Gtk.Label(label="—")
+            value.add_css_class("row-value")
+            value.set_halign(Gtk.Align.END)
+            value.set_hexpand(True)
+            value.set_ellipsize(Pango.EllipsizeMode.END)
+            value.set_max_width_chars(30)
+            self._grid.attach(label, 0, row, 1, 1)
+            self._grid.attach(value, 1, row, 1, 1)
+            return value
+
+        self._rows["today"] = add_row(0, "OpenCode 今日")
+        self._rows["total"] = add_row(1, "OpenCode 累计")
+        row = 2
+        for provider in self._providers:
+            self._rows[provider["id"]] = add_row(row, f"{provider['label']} 余额")
+            row += 1
+        if not self._providers:
+            hint = Gtk.Label(label="未配置余额查询（见 README）")
+            hint.add_css_class("muted")
+            hint.set_halign(Gtk.Align.START)
+            self._grid.attach(hint, 0, row, 2, 1)
+
+    def _render_usage(self, usage: dict | None) -> None:
+        if not usage:
+            text_today = text_total = "—"
+        else:
+            text_today = (f"${usage['today_cost']:.2f} · "
+                          f"{api_usage.fmt_tokens(usage['today_tokens'])} tok")
+            text_total = (f"${usage['total_cost']:.2f} · "
+                          f"{api_usage.fmt_tokens(usage['total_tokens'])} tok")
+        label_today = self._rows.get("today")
+        label_total = self._rows.get("total")
+        if label_today is not None:
+            label_today.set_text(text_today)
+            label_today.set_tooltip_text(f"共 {usage['sessions']} 个会话" if usage else None)
+        if label_total is not None:
+            label_total.set_text(text_total)
+
+    def _render_balances(self, items: list[dict] | None) -> None:
+        for item in items or []:
+            label = self._rows.get(item["id"])
+            if label is None:
+                continue
+            if item.get("error") or item.get("balance") is None:
+                label.set_text("—")
+                label.set_tooltip_text(str(item.get("error") or "查询失败")[:200])
+            else:
+                label.set_text(api_usage.fmt_balance(item["balance"], item["currency"]))
+                label.set_tooltip_text(f"{item['label']} 余额")
+
+    # ------------------------------------------------------------ 余额查询（后台线程）
+
+    def _spawn_fetch(self, force: bool) -> None:
+        if self._fetching:
+            return
+        self._fetching = True
+        providers = list(self._providers)
+        token = self._token
+
+        def worker() -> None:
+            items = api_usage.fetch_balances(providers, force=force)
+            GLib.idle_add(self._apply_balances, token, items)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_balances(self, token: int, items: list[dict]) -> bool:
+        self._fetching = False
+        if token == self._token:
+            self._render_balances(items)
+        return GLib.SOURCE_REMOVE
 
 
 class RecentFilesCard(Card):

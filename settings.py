@@ -22,6 +22,11 @@ DEFAULTS: dict = {
     "gap": 24,           # 卡片之间的间距
     "dark": True,        # 深色玻璃（False = 浅色）
     "reset_token": 0,    # +1 表示请求复位所有贴纸位置
+
+    # ---- API 用量卡片 ----
+    "api_providers": ["deepseek"],  # 余额预设：deepseek / moonshot / siliconflow
+    "api_custom": [],               # 自定义厂商（见 README，不写死任何厂商）
+    "api_keys": {},                 # 可选：{"moonshot": "sk-..."}；不填则用 OpenCode 凭据/环境变量
 }
 
 _RANGES = {
@@ -64,6 +69,12 @@ def load() -> dict:
                 if low is not None:
                     value = max(low, min(high, value))
                 values[key] = value
+            elif isinstance(default, list):
+                if isinstance(value, list):
+                    values[key] = value
+            elif isinstance(default, dict):
+                if isinstance(value, dict):
+                    values[key] = value
         except (TypeError, ValueError):
             continue
     values["reset_token"] = max(0, int(values.get("reset_token", 0)))

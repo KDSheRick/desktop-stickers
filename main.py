@@ -50,6 +50,7 @@ from positioner import (  # noqa: E402
 )
 from widgets import (  # noqa: E402
     BLUE,
+    ApiCard,
     PURPLE,
     TEAL,
     BatteryCard,
@@ -80,8 +81,8 @@ PAIRS = (("cpu", "mem"), ("disk", "net"), ("battery", "thermal"))
 # 左列里横跨两列的宽卡
 WIDE_LEFT = ("sys",)
 
-# 右上角一列（与宽卡同宽）：音乐 / 常用文件 / 进程
-RIGHT_COLUMN = ("music", "files", "proc")
+# 右上角一列（与宽卡同宽）：音乐 / 常用文件 / 进程 / API 用量
+RIGHT_COLUMN = ("music", "files", "proc", "api")
 
 # 所有横跨两列的宽卡
 WIDE_IDS = ("clock", "sys") + RIGHT_COLUMN
@@ -241,6 +242,7 @@ class StickerApp(Gtk.Application):
 
         self._saved = load_saved_positions()
         self._last_seen: dict[str, tuple[int, int, int]] = {}
+        self._last_sizes: dict[str, tuple[int, int]] = {}
         self._targets: dict[str, tuple[int, int]] = {}
         self._moving = False
         self._position_ready = False
@@ -390,6 +392,7 @@ class StickerApp(Gtk.Application):
             "thermal": ThermalCard(width=width),
             "files": RecentFilesCard(width=wide),
             "proc": ProcessCard(width=wide),
+            "api": ApiCard(width=wide),
         }
         if self.stats.has_battery:
             self.cards["battery"] = BatteryCard(width=width)
@@ -528,18 +531,62 @@ class StickerApp(Gtk.Application):
                       f"card={card.get_width()}x{card.get_height()}")
         for window in self.windows.values():
             window.set_opacity(1.0)
+        # 启动后内容（最近文件 / 封面等）可能让窗口宽度稍变，稍等片刻精确贴边一次
+        GLib.timeout_add(1500, self._settle_anchors)
 
-    def _track_positions(self) -> None:
-        """每秒跟踪：拖动停下后，逐张贴纸记住位置。"""
-        if not self._position_ready or not self.mover.ok:
-            return
-        changed = False
+    def _settle_anchors(self) -> bool:
+        """启动完成后把「仍然贴边」的卡片精确对齐（只校正接近锚点的卡片，不打扰拖动过的）。"""
+        if not self.mover.ok:
+            return GLib.SOURCE_REMOVE
+        scale = max((w.get_scale_factor() for w in self.windows.values()), default=1)
+        screen_w, _ = self.mover.screen_size()
+        margin = int(round(self.settings["margin_x"] * scale))
         for sid, window in self.windows.items():
             xid = xid_of(window)
             geometry = self.mover.geometry(xid) if xid else None
             if geometry is None:
                 continue
-            position = (geometry[0], geometry[1], geometry[2])
+            x, y, w, _ = geometry
+            if sid in RIGHT_COLUMN:
+                want = screen_w - w - margin
+            else:
+                want = margin
+            if x != want and abs(x - want) <= 60:
+                self.mover.move(xid, want, y)
+        return GLib.SOURCE_REMOVE
+
+    def _track_positions(self) -> None:
+        """每秒跟踪：拖动停下后记住位置；窗口尺寸变化时保持贴边对齐。"""
+        if not self._position_ready or not self.mover.ok:
+            return
+        changed = False
+        scale = max((w.get_scale_factor() for w in self.windows.values()), default=1)
+        screen_w, _ = self.mover.screen_size()
+        margin = int(round(self.settings["margin_x"] * scale))
+
+        for sid, window in self.windows.items():
+            xid = xid_of(window)
+            geometry = self.mover.geometry(xid) if xid else None
+            if geometry is None:
+                continue
+            x, y, w, h = geometry
+            previous_size = self._last_sizes.get(sid)
+            self._last_sizes[sid] = (w, h)
+
+            # 内容变化导致窗口宽度变了：原本贴边的卡片重新贴回边缘，避免出现错位
+            if previous_size is not None and previous_size != (w, h):
+                old_x = self._last_seen.get(sid, (x, y, w))[0]
+                if sid in RIGHT_COLUMN:
+                    if abs((old_x + previous_size[0]) - (screen_w - margin)) <= 6:
+                        want_x = screen_w - w - margin
+                        if abs(x - want_x) > 2:
+                            self.mover.move(xid, want_x, y)
+                            x = want_x
+                elif abs(old_x - margin) <= 6 and abs(x - margin) > 2:
+                    self.mover.move(xid, margin, y)
+                    x = margin
+
+            position = (x, y, w)
             if position == self._last_seen.get(sid) and position != self._saved.get(sid):
                 self._saved[sid] = position
                 changed = True
@@ -692,6 +739,9 @@ class StickerApp(Gtk.Application):
 
         # 常用文件（最近经常打开；内部有缓存，列表变了才重建）
         self.cards["files"].refresh()
+
+        # API 用量（OpenCode 花费 / token + 厂商余额，内部有缓存与后台刷新）
+        self.cards["api"].refresh(self.settings)
 
 
 def main() -> int:

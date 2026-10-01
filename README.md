@@ -27,6 +27,7 @@
 | 🎵 音乐 | 大封面 + 歌曲 / 歌手 / 进度条 + **上一曲 / 播放暂停 / 下一曲**；进度条可**点击 / 拖动定位** |
 | 📄 常用文件 | **最近经常打开的文件**（两列）：双击打开；右键打开 / 在文件管理器中显示 / 复制路径 |
 | 📊 进程 Top 3 | 本时段 CPU 占用最高的 3 个进程（名称 + CPU + 内存） |
+| 🔌 API 用量 | OpenCode 今日 / 累计花费与 token + 各厂商 API 余额（厂商可配置） |
 
 ## 布局
 
@@ -37,8 +38,8 @@
   - 电池 / 温度风扇
   - 系统（宽卡，两列信息）
   - 同一行的两张贴纸高度自动对齐
-- 右侧 3 张默认排布在**屏幕右上角**，与左侧顶部对齐：
-  音乐（大封面）、常用文件（两列）、进程 Top 3——**三张同宽**，
+- 右侧 4 张默认排布在**屏幕右上角**，与左侧顶部对齐：
+  音乐（大封面）、常用文件（两列）、进程 Top 3、API 用量——**四张同宽**，
   宽度与左侧时钟 / 系统卡一致，左右两个面板等宽、镜像平衡
 - 每张贴纸都可以**单独拖动**，位置单独记忆，下次启动精确恢复
 - 右键 → 「复位全部贴纸」一键把左右两列排回默认位置
@@ -220,6 +221,46 @@ bash ~/desktop-stickers/enable-blur.sh
   GSETTINGS_SCHEMA_DIR=$DIR gsettings set $S.applications whitelist "['*SysStickers*','*sysstickers*']"
   ```
 
+## API 用量卡片
+
+右侧「API 用量」卡片显示两类信息：
+
+- **OpenCode 用量**：今日 / 累计的**花费**与 **token** 数
+  （读本地数据库 `~/.local/share/opencode/opencode.db` 的会话统计，不联网）
+- **各厂商余额**：按配置查询各家的余额接口（默认 DeepSeek，**不写死任何厂商**）
+
+### 配置厂商
+
+设置文件：`~/.config/sysstickers/settings.json`
+
+内置预设：`deepseek`、`moonshot`、`siliconflow`
+
+```json
+{ "api_providers": ["deepseek", "moonshot"] }
+```
+
+任意其他厂商用 `api_custom` 自定义（示例：接口返回 `{"data":{"credit":12.5,"unit":"CNY"}}`）：
+
+```json
+{
+  "api_custom": [
+    {
+      "id": "myprovider",
+      "label": "我的厂商",
+      "url": "https://api.example.com/v1/balance",
+      "json_path": "data.credit",
+      "currency_path": "data.unit"
+    }
+  ]
+}
+```
+
+Key 的查找顺序：`api_keys`（写死在设置里，可选）→ **OpenCode 凭据库**（自动读取，通常不用配）
+→ 环境变量 `<ID>_API_KEY`（如 `MOONSHOT_API_KEY`）。
+
+> 余额默认 **10 分钟**查一次（避免频繁请求接口）；查不到时显示「—」，鼠标悬停可看错误原因；
+> 不想显示某厂商，把它从 `api_providers` 里删掉即可。实测：DeepSeek 余额可正常读取。
+
 ## 样式与自定义 GTK 主题
 
 贴纸的外观全部由 `style.css` 控制，但这里有一个**很容易踩的坑**：
@@ -276,6 +317,7 @@ desktop-stickers/
 ├── main.py               # 程序入口：窗口、布局、右键菜单、顶栏歌词开关
 ├── control.py            # 设置控制器（实时调尺寸 / 圆角 / 透明度 / 位置）
 ├── settings.py           # 设置的读写与样式生成（settings.json）
+├── api_usage.py          # OpenCode 用量统计 + 各厂商 API 余额查询
 ├── widgets.py            # 卡片组件（圆环 / 进度条 / 封面 / 文件卡 / 进程卡 / 可拖动进度条……）
 ├── collectors.py         # 数据采集（CPU、内存、磁盘、网络、进程、温度、风扇、MPRIS）
 ├── positioner.py         # X11 窗口定位与位置记忆

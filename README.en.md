@@ -26,6 +26,7 @@ Project page: <https://github.com/KDSheRick/desktop-stickers>
 | 🎵 Music | Cover art, title / artist, progress bar, **prev / play-pause / next**; bar is **clickable & draggable to seek** |
 | 📄 Recent files | Frequently & recently opened files (two columns): double-click to open, right-click for more |
 | 📊 Process Top 3 | Top CPU consumers with CPU + memory columns |
+| 🔌 API usage | OpenCode spend & tokens (today / total) + provider API balances (configurable) |
 
 Layout: system monitors on the left, music / files / processes on the right —
 both panels share the same width and are anchored to the screen corners.
@@ -120,6 +121,49 @@ edit the constants:
 > Note: if you change the card corner radius in `style.css`, also set the
 > Blur my Shell `applications corner-radius` to `card radius + 9` (run `enable-blur.sh`),
 > so the blur outline stays concentric with the card.
+
+## API usage card
+
+The right-side 贴纸 shows two things:
+
+- **OpenCode usage**: today / total **spend** and **tokens**, read locally from
+  `~/.local/share/opencode/opencode.db` (no network)
+- **Provider balances**: queries each configured provider's balance endpoint
+  (DeepSeek by default — **nothing is hardcoded to a vendor**)
+
+### Configure providers
+
+Settings file: `~/.config/sysstickers/settings.json`
+
+Built-in presets: `deepseek`, `moonshot`, `siliconflow`
+
+```json
+{ "api_providers": ["deepseek", "moonshot"] }
+```
+
+Any other vendor via `api_custom` (example endpoint returning
+`{"data":{"credit":12.5,"unit":"CNY"}}`):
+
+```json
+{
+  "api_custom": [
+    {
+      "id": "myprovider",
+      "label": "My Provider",
+      "url": "https://api.example.com/v1/balance",
+      "json_path": "data.credit",
+      "currency_path": "data.unit"
+    }
+  ]
+}
+```
+
+API keys are resolved in this order: `api_keys` in settings (optional) →
+**OpenCode credential store** (read automatically) → environment variable
+`<ID>_API_KEY` (e.g. `MOONSHOT_API_KEY`).
+
+> Balances refresh every **10 minutes**; failures show `—` with the error in the
+> tooltip. Remove a provider from `api_providers` to hide it.
 
 ## Styling & custom GTK themes
 
