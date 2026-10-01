@@ -124,7 +124,14 @@ edit the constants:
 
 ## API usage card
 
-The right-side 贴纸 shows two things:
+The card shows:
+
+- **Today's spend** (large) with today's tokens / replies and input / output / cache split
+- A **7-day spend mini bar chart** (today highlighted)
+- **Total spend** and tokens
+- **Provider balances** (anchored at the bottom)
+
+Data comes from two sources:
 
 - **OpenCode usage**: today / total **spend** and **tokens**, read locally from
   `~/.local/share/opencode/opencode.db` (no network)

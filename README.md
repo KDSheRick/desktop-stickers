@@ -223,7 +223,14 @@ bash ~/desktop-stickers/enable-blur.sh
 
 ## API 用量卡片
 
-右侧「API 用量」卡片显示两类信息：
+右侧「API 用量」卡片显示：
+
+- **今日花费**（大字）+ 今日 tokens / 回复数、输入 / 输出 / 缓存细分
+- **近 7 天花费**迷你柱状图（今天高亮）
+- **累计花费**与 tokens
+- **各厂商余额**（贴底显示）
+
+数据分两类：
 
 - **OpenCode 用量**：今日 / 累计的**花费**与 **tokens**
   （读本地数据库 `~/.local/share/opencode/opencode.db`，按逐条回复统计、精确到当天；

@@ -64,6 +64,7 @@ def _query_usage() -> dict | None:
     from datetime import datetime
 
     day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000
+    week_start = day_start - 6 * 86400_000   # 近 7 天（含今天）
     try:
         conn = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=2.0)
         try:
@@ -81,11 +82,27 @@ def _query_usage() -> dict | None:
                 cur.execute("""
                     SELECT COUNT(json_extract(data, '$.cost')),
                            COALESCE(SUM(json_extract(data, '$.cost')), 0),
-                           COALESCE(SUM(json_extract(data, '$.tokens.input')), 0)
-                             + COALESCE(SUM(json_extract(data, '$.tokens.output')), 0)
+                           COALESCE(SUM(json_extract(data, '$.tokens.input')), 0),
+                           COALESCE(SUM(json_extract(data, '$.tokens.output')), 0),
+                           COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0),
+                           COALESCE(SUM(json_extract(data, '$.tokens.cache.read')), 0)
                     FROM session_message
                     WHERE type = 'assistant' AND time_created >= ?""", (day_start,))
-                _, today_cost, today_tokens = cur.fetchone()
+                (today_messages, today_cost, today_in,
+                 today_out, today_reasoning, today_cache) = cur.fetchone()
+                today_tokens = int(today_in or 0) + int(today_out or 0)
+
+                # 近 7 天逐日花费（画迷你柱状图）
+                cur.execute("""
+                    SELECT time_created, json_extract(data, '$.cost')
+                    FROM session_message
+                    WHERE type = 'assistant' AND time_created >= ?
+                          AND json_extract(data, '$.cost') IS NOT NULL""", (week_start,))
+                daily = [0.0] * 7
+                for created, cost in cur.fetchall():
+                    index = int((int(created) - week_start) // 86400_000)
+                    if 0 <= index < 7:
+                        daily[index] += float(cost or 0.0)
             except sqlite3.Error:
                 # 老版本数据库：退回按会话统计
                 cur.execute("""
@@ -95,10 +112,12 @@ def _query_usage() -> dict | None:
                     FROM session_v2""")
                 total_messages, total_cost, total_tokens = cur.fetchone()
                 cur.execute("""
-                    SELECT COALESCE(SUM(cost), 0),
+                    SELECT COUNT(*), COALESCE(SUM(cost), 0),
                            COALESCE(SUM(tokens_input), 0) + COALESCE(SUM(tokens_output), 0)
                     FROM session_v2 WHERE time_created >= ?""", (day_start,))
-                today_cost, today_tokens = cur.fetchone()
+                today_messages, today_cost, today_tokens = cur.fetchone()
+                today_in = today_out = today_reasoning = today_cache = 0
+                daily = [0.0] * 7
         finally:
             conn.close()
     except sqlite3.Error:
@@ -108,8 +127,14 @@ def _query_usage() -> dict | None:
         "messages": int(total_messages or 0),
         "today_cost": float(today_cost or 0.0),
         "today_tokens": int(today_tokens or 0),
+        "today_messages": int(today_messages or 0),
+        "today_input": int(today_in or 0),
+        "today_output": int(today_out or 0),
+        "today_reasoning": int(today_reasoning or 0),
+        "today_cache": int(today_cache or 0),
         "total_cost": float(total_cost or 0.0),
         "total_tokens": int(total_tokens or 0),
+        "daily": daily,
     }
 
 

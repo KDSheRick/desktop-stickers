@@ -62,6 +62,21 @@ window {
   font-feature-settings: "tnum" 1;
 }
 
+.api-sub {
+  font-size: 11px;
+}
+
+.api-value {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.api-hero {
+  font-size: 20px;
+  font-weight: 700;
+  font-feature-settings: "tnum" 1;
+}
+
 .music-title {
   font-size: 16px;
   font-weight: 700;

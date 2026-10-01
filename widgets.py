@@ -1111,26 +1111,122 @@ class RecentFileRow(Gtk.Box):
         return popover
 
 
+class ApiBars(Gauge):
+    """近 7 天花费迷你柱状图（最后一根是今天，用橙色）。"""
+
+    def __init__(self, width: int, height: int = 46):
+        super().__init__(width, height)
+        self._bar_width = float(width)
+        self._bar_height = float(height)
+        self._values = [0.0]
+        self.set_draw_func(self._draw)
+
+    def set_values(self, values) -> None:
+        self._values = list(values)[-7:] or [0.0]
+        self.queue_draw()
+
+    def set_width(self, width: int) -> None:
+        self._bar_width = float(max(40, width))
+        self.set_size_request(int(self._bar_width), int(self._bar_height))
+        self.queue_draw()
+
+    def _draw(self, snapshot) -> None:
+        values = self._values
+        count = len(values)
+        if count == 0:
+            return
+        peak = max(max(values), 1e-9)
+        gap = 6.0
+        bar_width = max(4.0, (self._bar_width - gap * (count - 1)) / count)
+        radius = min(3.0, bar_width / 2.0)
+        for index, value in enumerate(values):
+            x = index * (bar_width + gap)
+            height = max(2.0, (float(value) / peak) * (self._bar_height - 2.0))
+            y = self._bar_height - height
+            today = index == count - 1
+            builder = Gsk.PathBuilder()
+            _rounded_rect(builder, x, y, bar_width, height, radius)
+            snapshot.append_fill(builder.to_path(), Gsk.FillRule.WINDING,
+                                 _rgba(ORANGE, 1.0) if today else _rgba((0.62, 0.64, 0.70), 0.55))
+
+
 class ApiCard(Card):
-    """API 用量卡片：OpenCode 花费 / token + 各厂商余额（厂商可配置）。"""
+    """API 用量卡片：今日 / 累计花费与 token、近 7 天趋势、各厂商余额（可配置）。"""
 
     def __init__(self, width: int = WIDE_WIDTH):
-        super().__init__("API 用量", ORANGE, width=width)
-        self._usage_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
-        self._balance_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
-        self.append(self._usage_grid)
-        spacer = Gtk.Box()
-        spacer.set_vexpand(True)
-        self.append(spacer)
-        self.append(self._balance_grid)
+        super().__init__("API 用量", ORANGE, width=width, spacing=6)
         self._rows: dict[str, Gtk.Label] = {}
         self._provider_key: tuple = ()
         self._providers: list[dict] = []
         self._fetching = False
         self._token = 0
-        self._rebuild()
+        self._bar_width = max(60, width - 24)
+
+        # ---- 今日（大字）
+        today_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="今日花费")
+        label.add_css_class("row-label")
+        label.set_halign(Gtk.Align.START)
+        self._hero = Gtk.Label(label="—")
+        self._hero.add_css_class("api-hero")
+        self._hero.set_halign(Gtk.Align.END)
+        self._hero.set_hexpand(True)
+        today_row.append(label)
+        today_row.append(self._hero)
+        self.append(today_row)
+
+        self._today_tokens = Gtk.Label(label=" ")
+        self._today_tokens.add_css_class("muted")
+        self._today_tokens.add_css_class("api-sub")
+        self._today_tokens.set_halign(Gtk.Align.END)
+        self.append(self._today_tokens)
+
+        self._today_mix = Gtk.Label(label=" ")
+        self._today_mix.add_css_class("muted")
+        self._today_mix.add_css_class("api-sub")
+        self._today_mix.set_halign(Gtk.Align.END)
+        self._today_mix.set_ellipsize(Pango.EllipsizeMode.END)
+        self.append(self._today_mix)
+
+        # ---- 近 7 天柱状图
+        caption = Gtk.Label(label="近 7 天花费")
+        caption.add_css_class("muted")
+        caption.set_halign(Gtk.Align.START)
+        self.append(caption)
+
+        self.bars = ApiBars(self._bar_width, 46)
+        self.bars.set_halign(Gtk.Align.START)
+        self.append(self.bars)
+
+        # ---- 累计
+        total_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        label = Gtk.Label(label="累计")
+        label.add_css_class("row-label")
+        label.set_halign(Gtk.Align.START)
+        self._total = Gtk.Label(label="—")
+        self._total.add_css_class("row-value")
+        self._total.add_css_class("api-value")
+        self._total.set_halign(Gtk.Align.END)
+        self._total.set_hexpand(True)
+        total_row.append(label)
+        total_row.append(self._total)
+        self.append(total_row)
+
+        spacer = Gtk.Box()
+        spacer.set_vexpand(True)
+        self.append(spacer)
+
+        # ---- 余额（贴底）
+        self._balance_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
+        self.append(self._balance_grid)
+        self._rebuild_balances()
 
     # ------------------------------------------------------------ 对外接口
+
+    def resize(self, width: int) -> None:
+        super().resize(width)
+        self._bar_width = max(60, width - 24)
+        self.bars.set_width(self._bar_width)
 
     def refresh(self, settings_values: dict | None = None) -> None:
         self._render_usage(api_usage.opencode_usage())
@@ -1141,7 +1237,7 @@ class ApiCard(Card):
             self._provider_key = ids
             self._providers = providers
             self._token += 1
-            self._rebuild()
+            self._rebuild_balances()
             self._spawn_fetch(force=True)
         elif api_usage.balances_expired():
             self._spawn_fetch(force=False)
@@ -1150,60 +1246,60 @@ class ApiCard(Card):
 
     # ------------------------------------------------------------ 渲染
 
-    @staticmethod
-    def _clear(grid: Gtk.Grid) -> None:
-        child = grid.get_first_child()
+    def _render_usage(self, usage: dict | None) -> None:
+        if not usage:
+            self._hero.set_text("—")
+            self._today_tokens.set_text(" ")
+            self._today_mix.set_text(" ")
+            self._total.set_text("—")
+            self.bars.set_values([0.0])
+            return
+
+        self._hero.set_text(f"${usage['today_cost']:.2f}")
+        self._today_tokens.set_text(
+            f"{api_usage.fmt_tokens(usage['today_tokens'])} tokens · "
+            f"{usage['today_messages']} 条回复")
+        self._today_mix.set_text(
+            f"入 {api_usage.fmt_tokens(usage['today_input'])} · "
+            f"出 {api_usage.fmt_tokens(usage['today_output'])} · "
+            f"缓存 {api_usage.fmt_tokens(usage['today_cache'])}")
+        self._total.set_text(
+            f"${usage['total_cost']:.2f} · {api_usage.fmt_tokens(usage['total_tokens'])} tokens")
+
+        daily = usage.get("daily") or []
+        self.bars.set_values(daily)
+        self.bars.set_tooltip_text("近 7 天花费：" + " / ".join(f"${value:.2f}" for value in daily)
+                                   if daily else None)
+
+    def _rebuild_balances(self) -> None:
+        child = self._balance_grid.get_first_child()
         while child is not None:
-            grid.remove(child)
-            child = grid.get_first_child()
+            self._balance_grid.remove(child)
+            child = self._balance_grid.get_first_child()
+        for provider in self._providers:
+            self._rows.pop(provider["id"], None)
 
-    def _rebuild(self) -> None:
-        self._clear(self._usage_grid)
-        self._clear(self._balance_grid)
-        self._rows = {}
-
-        def add_row(grid: Gtk.Grid, row: int, name: str) -> Gtk.Label:
-            label = Gtk.Label(label=name)
+        row = 0
+        for provider in self._providers:
+            label = Gtk.Label(label=f"{provider['label']} 余额")
             label.add_css_class("row-label")
             label.set_halign(Gtk.Align.START)
             value = Gtk.Label(label="—")
             value.add_css_class("row-value")
+            value.add_css_class("api-value")
             value.set_halign(Gtk.Align.END)
             value.set_hexpand(True)
             value.set_ellipsize(Pango.EllipsizeMode.END)
             value.set_max_width_chars(30)
-            grid.attach(label, 0, row, 1, 1)
-            grid.attach(value, 1, row, 1, 1)
-            return value
-
-        self._rows["today"] = add_row(self._usage_grid, 0, "OpenCode 今日")
-        self._rows["total"] = add_row(self._usage_grid, 1, "OpenCode 累计")
-        row = 0
-        for provider in self._providers:
-            self._rows[provider["id"]] = add_row(self._balance_grid, row,
-                                                 f"{provider['label']} 余额")
+            self._balance_grid.attach(label, 0, row, 1, 1)
+            self._balance_grid.attach(value, 1, row, 1, 1)
+            self._rows[provider["id"]] = value
             row += 1
         if not self._providers:
             hint = Gtk.Label(label="未配置余额查询（见 README）")
             hint.add_css_class("muted")
             hint.set_halign(Gtk.Align.START)
             self._balance_grid.attach(hint, 0, row, 2, 1)
-
-    def _render_usage(self, usage: dict | None) -> None:
-        if not usage:
-            text_today = text_total = "—"
-        else:
-            text_today = (f"${usage['today_cost']:.2f} · "
-                          f"{api_usage.fmt_tokens(usage['today_tokens'])} tokens")
-            text_total = (f"${usage['total_cost']:.2f} · "
-                          f"{api_usage.fmt_tokens(usage['total_tokens'])} tokens")
-        label_today = self._rows.get("today")
-        label_total = self._rows.get("total")
-        if label_today is not None:
-            label_today.set_text(text_today)
-            label_today.set_tooltip_text(f"共 {usage['messages']} 条回复" if usage else None)
-        if label_total is not None:
-            label_total.set_text(text_total)
 
     def _render_balances(self, items: list[dict] | None) -> None:
         for item in items or []:
