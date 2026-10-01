@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import subprocess
@@ -59,8 +60,13 @@ from positioner import X11Mover, xid_of  # noqa: E402
 from widgets import ApiBars, SeekBar, _rgba, _rounded_rect  # noqa: E402
 
 APP_ID = "com.loong.DynamicIsland"
+OBJECT_PATH = "/" + APP_ID.replace(".", "/")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSS_FILE = os.path.join(BASE_DIR, "island.css")
+
+# 开关状态（开机自启会读它；在应用菜单 / 贴纸右键菜单里切换也会更新）
+STATE_FILE = os.path.join(settings.CONFIG_DIR, "island.json")
+LOG_FILE = os.path.join(os.path.expanduser("~"), ".cache", "sysstickers", "island.log")
 
 # ---- 几何参数（逻辑像素，X11 里会按缩放因子换算成物理像素）----
 PAD = 18             # 窗口内留白（给阴影）
@@ -126,6 +132,66 @@ def _mpris_call(bus_name: str, method: str, params: GLib.Variant | None = None) 
             method, params, None, Gio.DBusCallFlags.NONE, 800, None, None)
     except GLib.Error:
         pass
+
+
+# ---------------------------------------------------------------- 进程控制
+#
+# 供应用菜单 / 开机自启使用（单实例由 GApplication 保证）：
+#   island.py --status / --start / --stop / --toggle / --autostart
+
+def _bus_has_owner() -> bool:
+    """灵动岛是否在运行（看 session bus 上有没有注册这个名字）。"""
+    try:
+        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        reply = conn.call_sync(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+            "NameHasOwner", GLib.Variant("(s)", (APP_ID,)), None,
+            Gio.DBusCallFlags.NONE, 500, None)
+        return bool(reply.unpack()[0])
+    except GLib.Error:
+        return False
+
+
+def _request_quit() -> None:
+    """请正在运行的实例退出（走应用内的 quit 动作）。"""
+    try:
+        conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        conn.call_sync(APP_ID, OBJECT_PATH, "org.gtk.Actions", "Activate",
+                       GLib.Variant("(sava{sv})", ("quit", [], {})), None,
+                       Gio.DBusCallFlags.NONE, 800, None)
+    except GLib.Error:
+        pass
+
+
+def _spawn() -> None:
+    """后台启动一个实例（输出追加到日志文件）。"""
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        log = open(LOG_FILE, "ab")
+    except OSError:
+        log = subprocess.DEVNULL
+    subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__)],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+
+
+def set_enabled(enabled: bool) -> None:
+    """记住开关状态；开机自启读取它（关掉后重启系统不会自己回来）。"""
+    try:
+        os.makedirs(settings.CONFIG_DIR, exist_ok=True)
+        with open(STATE_FILE + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump({"enabled": bool(enabled)}, fh)
+        os.replace(STATE_FILE + ".tmp", STATE_FILE)
+    except OSError:
+        pass
+
+
+def is_enabled() -> bool:
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("enabled", True))
+    except (OSError, ValueError, AttributeError):
+        return True
 
 
 # ---------------------------------------------------------------- 自绘部件
@@ -615,7 +681,7 @@ class IslandView(Gtk.ApplicationWindow):
         if self._menu is None:
             menu = Gio.Menu()
             menu.append("打开贴纸设置…", "app.open-control")
-            menu.append("退出灵动岛", "app.quit")
+            menu.append("关闭灵动岛", "app.quit")
             self._menu = Gtk.PopoverMenu.new_from_model(menu)
             self._menu.set_parent(self.pill)
             self._menu.connect("show", self._on_menu_show)
@@ -888,12 +954,17 @@ class IslandApp(Gtk.Application):
 
     def _install_actions(self) -> None:
         quit_action = Gio.SimpleAction.new("quit", None)
-        quit_action.connect("activate", lambda *_a: self.quit())
+        quit_action.connect("activate", self._on_quit)
         self.add_action(quit_action)
 
         control_action = Gio.SimpleAction.new("open-control", None)
         control_action.connect("activate", self._open_control)
         self.add_action(control_action)
+
+    def _on_quit(self, *_args) -> None:
+        """关闭 = 不再自启（与顶栏歌词插件一致，重启系统不会自己回来）。"""
+        set_enabled(False)
+        self.quit()
 
     @staticmethod
     def _open_control(*_args) -> None:
@@ -1085,7 +1156,42 @@ def main() -> int:
                                             "expanded-idle", "expanded-music"],
                         help="强制某个视觉状态（会自动进入演示模式）")
     parser.add_argument("--snapshot", metavar="FILE", help="渲染截图到文件后退出（配合 --state）")
+    # 进程控制（应用菜单 / 开机自启使用）
+    parser.add_argument("--status", action="store_true", help="查看运行状态（running / stopped）")
+    parser.add_argument("--start", action="store_true", help="启动，并记住「开启」")
+    parser.add_argument("--stop", action="store_true", help="关闭，并记住「关闭」")
+    parser.add_argument("--toggle", action="store_true", help="开 / 关切换")
+    parser.add_argument("--autostart", action="store_true", help="开机自启入口（尊重上次开关）")
     args = parser.parse_args()
+
+    running = _bus_has_owner()
+    if args.status:
+        print("running" if running else "stopped")
+        return 0
+    if args.start:
+        set_enabled(True)
+        if not running:
+            _spawn()
+        return 0
+    if args.stop:
+        set_enabled(False)
+        if running:
+            _request_quit()
+        return 0
+    if args.toggle:
+        if running:
+            set_enabled(False)
+            _request_quit()
+            print("灵动岛：已关闭（重启系统后也不会自启）")
+        else:
+            set_enabled(True)
+            _spawn()
+            print("灵动岛：已开启")
+        return 0
+    if args.autostart:
+        if is_enabled() and not running:
+            _spawn()
+        return 0
 
     snapshot = args.snapshot
     if snapshot and not args.state:

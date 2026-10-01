@@ -231,6 +231,23 @@ python3 island.py --demo             # 演示模式：假音乐 + 假数据，�
 python3 island.py --state expanded-music --snapshot docs/island.png   # 渲染截图（写文档用）
 ```
 
+### 开关方式（状态会被记住，重启后保持）
+
+1. **应用菜单**（GNOME 活动 → 搜索「灵动岛」）：点击即开/关切换
+2. **任意贴纸右键菜单 →「灵动岛」**：打勾 = 已开启，点一下切换
+3. 命令行：
+
+   ```bash
+   python3 island.py --status   # 查看状态（running / stopped）
+   python3 island.py --start    # 打开
+   python3 island.py --stop     # 关闭
+   python3 island.py --toggle   # 切换
+   ```
+
+开关状态保存在 `~/.config/sysstickers/island.json`；开机自启（`island.py --autostart`）
+会读取该状态，**关掉之后重启系统也不会自己回来**（与顶栏歌词的约定一致）。
+日志在 `~/.cache/sysstickers/island.log`。
+
 实现说明：
 
 - 窗口是**固定大小的透明窗**，胶囊在窗口内逐帧变形（约 60fps）；每帧用 XShape
@@ -321,7 +338,7 @@ Key 的查找顺序：`api_keys`（写死在设置里，可选）→ **OpenCode 
 ## 开机自启
 
 ```bash
-bash install-autostart.sh          # 加入自启 + 应用菜单快捷方式
+bash install-autostart.sh          # 贴纸 / 顶栏歌词 / 灵动岛：加入自启 + 应用菜单快捷方式
 bash install-autostart.sh --remove # 卸载
 ```
 

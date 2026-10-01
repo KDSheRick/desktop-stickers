@@ -120,6 +120,23 @@ python3 island.py --demo             # demo data, no player needed
 python3 island.py --state expanded-music --snapshot docs/island.png   # render a screenshot
 ```
 
+### Toggling (state is remembered)
+
+1. **App menu** (Activities → search "Dynamic Island"): click to toggle on/off
+2. **Right-click any sticker → "灵动岛"**: checked = running
+3. Command line:
+
+   ```bash
+   python3 island.py --status   # running / stopped
+   python3 island.py --start    # enable
+   python3 island.py --stop     # disable
+   python3 island.py --toggle   # switch
+   ```
+
+The on/off state lives in `~/.config/sysstickers/island.json`; autostart
+(`island.py --autostart`) respects it, so after disabling it won't come back on reboot
+(same convention as the lyrics plugin). Logs: `~/.cache/sysstickers/island.log`.
+
 Implementation notes:
 
 - The window is **fixed-size and transparent**; the capsule morphs inside it frame by
@@ -137,7 +154,7 @@ Implementation notes:
 ## Autostart & blur
 
 ```bash
-bash install-autostart.sh          # add to startup + app menu shortcuts
+bash install-autostart.sh          # stickers / lyrics / island: startup + app menu entries
 bash enable-blur.sh                # real background blur (needs GNOME Rounded Blur)
 bash tools/gnome-rounded-blur/rounded_blur_build.sh -i   # install that library (sudo)
 ```
