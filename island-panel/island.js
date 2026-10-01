@@ -37,6 +37,7 @@ const W_PAUSED = 124;     // 暂停时缩回小胶囊（封面 + 静止波形）
 const MARQUEE_W = W_MUSIC - 24 - 22 - 16 - 20;
 const MARQUEE_SPEED = 45;   // 滚动速度（逻辑像素/秒）
 const MARQUEE_GAP = 28;     // 一圈滚完到下一圈之间的间隔
+const NOTIFY_HOLD_MS = 5000; // 通知在胶囊里停留的时长
 const W_EXPANDED = 424;
 const H_COLLAPSED = 34;
 const H_EXPANDED = 210;
@@ -119,6 +120,10 @@ export class Island {
         this._eqPhase = 0;
         this._scrubbing = false;
         this._miniLyricCycle = 0;
+        this._notificationActive = false;
+        this._notifyHoldTimer = 0;
+        this._sourceSignals = new Map();
+        this._traySignals = [];
         this._marqueeTimer = 0;
         this._marqueeFrom = 0;
         this._marqueeTo = 0;
@@ -161,6 +166,7 @@ export class Island {
             });
 
             this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._place(false));
+            this._watchNotifications();
             this._showView(this._stateKey(), 0);
             console.log(`[灵动岛] 已启用（${this._expanded ? '展开' : '收起'}态，${W_EXPANDED}x${H_EXPANDED}）`);
         } catch (error) {
@@ -187,6 +193,10 @@ export class Island {
         this._morphTimer = 0;
         this._collapseTimer = 0;
         this._miniLyricCycle = 0;
+        this._notificationActive = false;
+        this._notifyHoldTimer = 0;
+        this._sourceSignals = new Map();
+        this._traySignals = [];
         this._marqueeTimer = 0;
         this._marqueeFrom = 0;
         this._marqueeTo = 0;
@@ -197,6 +207,7 @@ export class Island {
             this._monitorsId = 0;
         }
 
+        this._unwatchNotifications();
         this._media?.disable();
         this._usageWatcher?.disable();
         this._media = null;
@@ -245,6 +256,7 @@ export class Island {
             'false:idle': this._buildCollapsedIdle(),
             'false:playing': this._buildCollapsedMusic(),
             'false:paused': this._buildCollapsedPaused(),
+            'false:notify': this._buildNotifyView(),
             'true:playing': this._buildExpandedMusic(),
             'true:idle': this._buildExpandedIdle(),
         };
@@ -339,6 +351,28 @@ export class Island {
         return box;
     }
 
+    /** 收起态·系统通知：[应用图标] 标题 正文 */
+    _buildNotifyView() {
+        const box = new St.BoxLayout({style_class: 'island-collapsed'});
+        box.x_expand = true;
+        box.y_expand = true;
+
+        this._notifyIcon = new St.Icon({style_class: 'island-notify-icon', icon_size: 16});
+        this._notifyIcon.y_align = Clutter.ActorAlign.CENTER;
+        this._notifyIcon.visible = false;
+        box.add_child(this._notifyIcon);
+
+        this._notifyTitle = makeLabel('', 'island-notify-title', {ellipsize: true});
+        this._notifyTitle.y_align = Clutter.ActorAlign.CENTER;
+        box.add_child(this._notifyTitle);
+
+        this._notifyBody = makeLabel('', 'island-notify-body', {ellipsize: true});
+        this._notifyBody.y_align = Clutter.ActorAlign.CENTER;
+        this._notifyBody.x_expand = true;
+        box.add_child(this._notifyBody);
+        return box;
+    }
+
     _buildCollapsedMusic() {
         const box = new St.BoxLayout({style_class: 'island-collapsed'});
         box.x_expand = true;
@@ -385,6 +419,107 @@ export class Island {
         }
         box.add_child(bars);
         return box;
+    }
+
+    // ------------------------------------------------------------ 系统通知
+
+    /** 监听 MessageTray：新通知时在胶囊里显示几秒 */
+    _watchNotifications() {
+        const tray = Main.messageTray;
+        if (!tray)
+            return;
+        this._traySignals.push(tray.connect('source-added', (_tray, source) => this._watchSource(source)));
+        this._traySignals.push(tray.connect('source-removed', (_tray, source) => {
+            const id = this._sourceSignals.get(source);
+            if (id) {
+                source.disconnect(id);
+                this._sourceSignals.delete(source);
+            }
+        }));
+        if (typeof tray.getSources === 'function') {
+            for (const source of tray.getSources())
+                this._watchSource(source);
+        }
+    }
+
+    _watchSource(source) {
+        if (!source || this._sourceSignals.has(source))
+            return;
+        const id = source.connect('notification-added', (_source, notification) => {
+            this._onNotification(source, notification);
+        });
+        this._sourceSignals.set(source, id);
+    }
+
+    _onNotification(source, notification) {
+        this._notifyApp = String(source?.title ?? '');
+        this._notifyTitleText = String(notification?.title ?? '');
+        this._notifyBodyText = String(notification?.body ?? '');
+        let gicon = null;
+        try {
+            gicon = notification?.gicon ?? null;
+        } catch {
+            gicon = null;
+        }
+        if (!gicon) {
+            try {
+                gicon = source?.icon ?? null;
+            } catch {
+                gicon = null;
+            }
+        }
+        this._notifyGicon = gicon;
+
+        this._notificationActive = true;
+        this._refreshNotificationView();
+        if (!this._expanded)
+            this._showView(this._stateKey());
+
+        if (this._notifyHoldTimer)
+            GLib.source_remove(this._notifyHoldTimer);
+        this._notifyHoldTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, NOTIFY_HOLD_MS, () => {
+            this._notifyHoldTimer = 0;
+            this._notificationActive = false;
+            if (!this._expanded)
+                this._showView(this._stateKey());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _refreshNotificationView() {
+        setText(this._notifyTitle, this._notifyTitleText || this._notifyApp || '通知');
+        setText(this._notifyBody, this._notifyBodyText || '');
+        const gicon = this._notifyGicon;
+        if (gicon) {
+            this._notifyIcon.gicon = gicon;
+            this._notifyIcon.visible = true;
+        } else {
+            this._notifyIcon.visible = false;
+        }
+    }
+
+    _unwatchNotifications() {
+        for (const [source, id] of this._sourceSignals) {
+            try {
+                source.disconnect(id);
+            } catch {
+                // source 可能已销毁
+            }
+        }
+        this._sourceSignals.clear();
+        for (const id of this._traySignals) {
+            try {
+                Main.messageTray.disconnect(id);
+            } catch {
+                // 忽略
+            }
+        }
+        this._traySignals = [];
+        if (this._notifyHoldTimer) {
+            GLib.source_remove(this._notifyHoldTimer);
+            this._notifyHoldTimer = 0;
+        }
+        this._notificationActive = false;
     }
 
     // ------------------------------------------------------------ 滚动歌词
@@ -692,6 +827,8 @@ export class Island {
     }
 
     _stateKey() {
+        if (!this._expanded && this._notificationActive)
+            return 'false:notify';
         return `${this._expanded}:${this._stateKind()}`;
     }
 
@@ -703,6 +840,8 @@ export class Island {
             return [W_MUSIC, H_COLLAPSED];
         if (kind === 'paused')
             return [W_PAUSED, H_COLLAPSED];
+        if (kind === 'notify')
+            return [W_MUSIC, H_COLLAPSED];
         return [W_IDLE, H_COLLAPSED];
     }
 

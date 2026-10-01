@@ -114,6 +114,8 @@ A pure-black capsule centered at the top: **hover to expand, move away → colla
 - Collapsed: time when idle; while playing it becomes a **long capsule** with the
   current lyric scrolling inside it; paused shrinks back to the small pill
   (cover + static EQ bars)
+- **Notifications**: a new notification turns the capsule into "app icon + title + body"
+  for 5 seconds, then it goes back to normal (GNOME's own banner still shows)
 - Expanded (playing): cover / title / artist / draggable progress bar / prev · play · next /
   current lyric
 - Expanded (idle): large clock + date, today's cost / tokens / total, 7-day mini bar chart
