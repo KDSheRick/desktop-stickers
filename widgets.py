@@ -1116,8 +1116,13 @@ class ApiCard(Card):
 
     def __init__(self, width: int = WIDE_WIDTH):
         super().__init__("API 用量", ORANGE, width=width)
-        self._grid = Gtk.Grid(column_spacing=10, row_spacing=6)
-        self.append(self._grid)
+        self._usage_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
+        self._balance_grid = Gtk.Grid(column_spacing=10, row_spacing=6)
+        self.append(self._usage_grid)
+        spacer = Gtk.Box()
+        spacer.set_vexpand(True)
+        self.append(spacer)
+        self.append(self._balance_grid)
         self._rows: dict[str, Gtk.Label] = {}
         self._provider_key: tuple = ()
         self._providers: list[dict] = []
@@ -1145,14 +1150,19 @@ class ApiCard(Card):
 
     # ------------------------------------------------------------ 渲染
 
-    def _rebuild(self) -> None:
-        child = self._grid.get_first_child()
+    @staticmethod
+    def _clear(grid: Gtk.Grid) -> None:
+        child = grid.get_first_child()
         while child is not None:
-            self._grid.remove(child)
-            child = self._grid.get_first_child()
+            grid.remove(child)
+            child = grid.get_first_child()
+
+    def _rebuild(self) -> None:
+        self._clear(self._usage_grid)
+        self._clear(self._balance_grid)
         self._rows = {}
 
-        def add_row(row: int, name: str) -> Gtk.Label:
+        def add_row(grid: Gtk.Grid, row: int, name: str) -> Gtk.Label:
             label = Gtk.Label(label=name)
             label.add_css_class("row-label")
             label.set_halign(Gtk.Align.START)
@@ -1162,21 +1172,22 @@ class ApiCard(Card):
             value.set_hexpand(True)
             value.set_ellipsize(Pango.EllipsizeMode.END)
             value.set_max_width_chars(30)
-            self._grid.attach(label, 0, row, 1, 1)
-            self._grid.attach(value, 1, row, 1, 1)
+            grid.attach(label, 0, row, 1, 1)
+            grid.attach(value, 1, row, 1, 1)
             return value
 
-        self._rows["today"] = add_row(0, "OpenCode 今日")
-        self._rows["total"] = add_row(1, "OpenCode 累计")
-        row = 2
+        self._rows["today"] = add_row(self._usage_grid, 0, "OpenCode 今日")
+        self._rows["total"] = add_row(self._usage_grid, 1, "OpenCode 累计")
+        row = 0
         for provider in self._providers:
-            self._rows[provider["id"]] = add_row(row, f"{provider['label']} 余额")
+            self._rows[provider["id"]] = add_row(self._balance_grid, row,
+                                                 f"{provider['label']} 余额")
             row += 1
         if not self._providers:
             hint = Gtk.Label(label="未配置余额查询（见 README）")
             hint.add_css_class("muted")
             hint.set_halign(Gtk.Align.START)
-            self._grid.attach(hint, 0, row, 2, 1)
+            self._balance_grid.attach(hint, 0, row, 2, 1)
 
     def _render_usage(self, usage: dict | None) -> None:
         if not usage:

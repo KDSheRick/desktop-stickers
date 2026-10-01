@@ -446,6 +446,7 @@ class StickerApp(Gtk.Application):
 
         layout = compute_layout(final_heights, self.settings["card_width"], self.settings["gap"],
                                 self.settings["margin_x"], self.settings["margin_top"])
+        self._stretch_api_card(final_heights, layout)
         screen_w, screen_h = self.mover.screen_size()
         right_anchors = self._right_anchors(final_heights, scale, screen_w)
 
@@ -479,6 +480,26 @@ class StickerApp(Gtk.Application):
         self._place_attempts = 0
         self._stable_rounds = 0
         GLib.timeout_add(150, self._place_step)
+
+    def _stretch_api_card(self, heights: dict, layout: dict) -> None:
+        """让右列最后一张（API 卡）纵向拉伸到与左列底部齐平。"""
+        card = self.cards.get("api")
+        if card is None or "api" not in heights:
+            return
+        window_gap = max(0, self.settings["gap"] - 2 * WINDOW_MARGIN)
+        left_bottom = max(
+            (y + heights[sid] for sid, (x, y) in layout.items() if sid not in RIGHT_COLUMN),
+            default=0)
+        api_top = self.settings["margin_top"]
+        for sid in RIGHT_COLUMN:
+            if sid == "api":
+                break
+            if sid in heights:
+                api_top += heights[sid] + window_gap
+        desired = int(left_bottom - api_top) - 2 * WINDOW_MARGIN
+        natural = card.measure(Gtk.Orientation.VERTICAL, -1)[1]
+        width = int(self.settings["card_width"] * 2 + self.settings["gap"])
+        card.set_size_request(width, max(desired, natural, 1))
 
     def _right_anchors(self, heights: dict, scale: int, screen_w: int) -> dict:
         """右上角一列的目标坐标（设备像素）；仅用于没有位置记忆的贴纸。"""
