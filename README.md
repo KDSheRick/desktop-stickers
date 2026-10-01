@@ -253,6 +253,11 @@ bash island-panel/install-island.sh --remove # 卸载（系统时钟会随之恢
 - 数据复用项目里的 Python 模块：安装脚本会把 `api_usage.py`、`settings.py` 复制进扩展目录，
   扩展每分钟调用一次 `python3 api_usage.py --json` 拿用量与余额（余额本身有 10 分钟缓存）
 
+> **登录后岛没出现？** 先看 GNOME 的「用户扩展」总开关是不是被关了：
+> `gsettings get org.gnome.shell disable-user-extensions` —— 应为 `false`；
+> 若是 `true`，把它设回 `false` 即可（这条开关会让**所有**第三方扩展都不加载）。
+> 也可以用 `gnome-extensions info lyrics-panel@loong` 看状态是否为 `ACTIVE`。
+
 ## 毛玻璃效果说明
 
 - 每张贴纸窗口的透明度、圆角、阴影、描边都在 `style.css` 调整

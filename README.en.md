@@ -152,6 +152,11 @@ bash island-panel/install-island.sh --remove # uninstall (the system clock comes
   into the extension dir and the extension runs `python3 api_usage.py --json` once a minute
   (balances are cached on disk for 10 minutes)
 
+> **Island missing after login?** Check GNOME's global user-extension switch:
+> `gsettings get org.gnome.shell disable-user-extensions` should be `false` (when it is
+> `true`, *no* third-party extension loads). `gnome-extensions info lyrics-panel@loong`
+> should report the state as `ACTIVE`.
+
 ## Autostart & blur
 
 ```bash
