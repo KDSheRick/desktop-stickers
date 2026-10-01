@@ -84,6 +84,26 @@ bash tools/gnome-rounded-blur/rounded_blur_build.sh -i   # install that library 
 > Blur my Shell `applications corner-radius` to `card radius + 9` (run `enable-blur.sh`),
 > so the blur outline stays concentric with the card.
 
+## Styling & custom GTK themes
+
+The stickers are entirely styled by `style.css`. One catch worth knowing:
+
+Third-party GTK themes (MacTahoe, Orchis, …) ship a user stylesheet at
+`~/.config/gtk-4.0/gtk.css`, loaded at the **USER priority**. It overrides *generic*
+selectors such as `window`, `.card` and `button`, which makes the stickers look wrong:
+
+- card backgrounds pick up the theme's colors instead of the glass design
+- buttons fall back to the theme's default look (square corners, dated icons)
+- custom classes like `.clock-time` are unaffected — so it looks inconsistent,
+  and is hard to debug
+
+The app therefore loads its own `style.css` at **USER + 1** priority
+(see `_load_css` in `main.py`), so the stickers always render as designed,
+no matter which theme is installed.
+
+> Want to follow the theme instead? Write your overrides at USER+2 or higher,
+> or simply edit `style.css` in this project.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

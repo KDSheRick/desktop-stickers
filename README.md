@@ -188,6 +188,23 @@ bash ~/desktop-stickers/enable-blur.sh
   GSETTINGS_SCHEMA_DIR=$DIR gsettings set $S.applications whitelist "['*SysStickers*','*sysstickers*']"
   ```
 
+## 样式与自定义 GTK 主题
+
+贴纸的外观全部由 `style.css` 控制，但这里有一个**很容易踩的坑**：
+
+如果系统装过第三方 GTK 主题（例如 MacTahoe、Orchis 等，会写入 `~/.config/gtk-4.0/gtk.css`），
+这类「用户样式」以 **USER 优先级**加载，会覆盖 `window`、`.card`、`button` 这些**通用选择器**：
+
+- 卡片背景会变成主题的配色，而不是贴纸设计的玻璃色
+- 按钮会变成主题的默认外观（方角、旧式图标）
+- 而 `.clock-time` 这类**自定义类名**不受影响 —— 于是表现成"有的地方对、有的地方不对"，很难排查
+
+贴纸的处理方式是：**以自己的 `style.css` 以 `USER + 1` 优先级加载**（见 `main.py` 的 `_load_css`），
+无论系统装了什么主题，贴纸都严格按项目设计渲染。
+
+> 如果你希望贴纸跟随主题（或用更高的优先级覆盖贴纸样式），把你的规则写到 USER+2 及以上，
+> 或直接修改本项目的 `style.css`。
+
 ## 开机自启
 
 ```bash
@@ -217,7 +234,7 @@ bash install-autostart.sh --remove # 卸载
 - 进程 Top 3 需要两次采样算 CPU 差值，启动后约 2 秒显示内容
 - 拖动进度条定位依赖播放器支持 MPRIS `SetPosition` / `Seek`（Firefox、多数播放器都支持）
 - 若安装了自定义 GTK 主题（`~/.config/gtk-4.0/gtk.css`），它会覆盖 `window` / `.card` / `button`
-  这类通用样式；贴纸以 **USER+1 优先级**加载自己的 `style.css`，保证外观不受主题影响
+  这类通用样式；贴纸以 **USER+1 优先级**加载自己的 `style.css` 保证外观（详见上文「样式与自定义 GTK 主题」）
 - 风扇转速来自传感器（本机为 `dell_smm`）；读不到时显示「风扇 —」
 
 ## 项目结构
