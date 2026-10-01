@@ -49,6 +49,9 @@ export function parseLrc(text) {
         const content = raw.replace(/\[[^\]]*\]/g, '').trim();
         if (!content || CREDIT_RE.test(content))
             continue;
+        // 网易云给纯音乐的占位歌词：当作「没有歌词」，让 UI 回退到歌名 · 歌手
+        if (/^(纯音乐[，,]?\s*请欣赏|纯音乐|instrumental|请欣赏)$/i.test(content))
+            continue;
 
         for (const stamp of stamps) {
             const minutes = parseInt(stamp[1], 10);
@@ -166,7 +169,8 @@ export class MediaWatcher {
         this._onCover = onCover ?? (() => {});
 
         this._cacheDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'sysstickers', 'lyrics']);
-        this._coverDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'sysstickers', 'covers-js']);
+        // 与桌面贴纸（Python 侧 covers.py）共用同一个图片缓存
+        this._coverDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'sysstickers', 'covers']);
         GLib.mkdir_with_parents(this._cacheDir, 0o755);
         GLib.mkdir_with_parents(this._coverDir, 0o755);
 
@@ -442,7 +446,7 @@ export class MediaWatcher {
                 this._resolveCover(cached.cover, generation);
                 return;
             }
-            // 缓存里只有歌词（例如早期版本没存封面）：继续往下走一次搜索补封面
+            // 缓存里只有歌词、没有封面：继续往下走一次搜索补封面
         }
 
         const query = `${title} ${primaryArtist(artist)}`.trim();
@@ -574,7 +578,9 @@ export class MediaWatcher {
     // ------------------------------------------------------------ 歌词缓存
 
     _cachePath(title, artist) {
-        const digest = sha1(`${title}|${artist}`);
+        // 用 sha256（与 Python 侧 lyrics.py 一致）：直接沿用贴纸缓存的歌词与封面
+        const digest = GLib.compute_checksum_for_string(
+            GLib.ChecksumType.SHA256, `${title}|${artist}`, -1);
         return GLib.build_filenamev([this._cacheDir, `${digest}.json`]);
     }
 
@@ -584,11 +590,13 @@ export class MediaWatcher {
             if (!ok)
                 return null;
             const data = JSON.parse(new TextDecoder().decode(contents));
-            if (Array.isArray(data) && data.length)   // 旧格式：只有歌词
-                return {lines: data, cover: null};
-            const lines = data?.lines;
-            if (Array.isArray(lines) && lines.length)
-                return {lines, cover: data?.cover ?? null};
+            let lines = Array.isArray(data) ? data : data?.lines;   // 数组 = 旧格式
+            const cover = Array.isArray(data) ? null : (data?.cover ?? null);
+            if (!Array.isArray(lines))
+                return null;
+            lines = lines.filter(line => !/^(纯音乐[，,]?\s*请欣赏|纯音乐|instrumental|请欣赏)$/i.test(
+                String(line?.text ?? '').trim()));
+            return {lines, cover};
         } catch {
             // 缓存损坏直接忽略
         }
