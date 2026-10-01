@@ -117,7 +117,11 @@ A pure-black capsule centered at the top: **hover to expand, move away → colla
 - **Notifications**: a new notification auto-expands the island into a card
   (icon + title/app + body) for 5 seconds, then it collapses back; multiple
   notifications are queued one by one; clicking the card opens the notification
-  center; hovering pauses the countdown (GNOME's own banner still shows as well)
+  center; hovering pauses the countdown
+  - To show them *only* in the island (no GNOME banners):
+    `gsettings set org.gnome.desktop.notifications show-banners false`
+    (notifications still go to the notification center; set it back to `true` to
+    restore the banners)
 - Expanded (playing): cover / title / artist / draggable progress bar / prev · play · next /
   current lyric
 - Expanded (idle): large clock + date, today's cost / tokens / total, 7-day mini bar chart
