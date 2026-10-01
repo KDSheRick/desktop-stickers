@@ -121,6 +121,9 @@ export class Island {
         this._scrubbing = false;
         this._miniLyricCycle = 0;
         this._notificationActive = false;
+        this._notifyExpanded = false;
+        this._notifyQueue = [];
+        this._notifyItem = null;
         this._notifyHoldTimer = 0;
         this._sourceSignals = new Map();
         this._traySignals = [];
@@ -194,6 +197,9 @@ export class Island {
         this._collapseTimer = 0;
         this._miniLyricCycle = 0;
         this._notificationActive = false;
+        this._notifyExpanded = false;
+        this._notifyQueue = [];
+        this._notifyItem = null;
         this._notifyHoldTimer = 0;
         this._sourceSignals = new Map();
         this._traySignals = [];
@@ -260,6 +266,7 @@ export class Island {
             'true:playing': this._buildExpandedMusic(),
             'true:idle': this._buildExpandedIdle(),
         };
+        this._views['true:notify'] = this._buildNotifyCard();
         // 展开态不区分播放/暂停（只是播放按钮图标不同）
         this._views['true:paused'] = this._views['true:playing'];
         // 四个视图常驻、只切换可见性：避免在动画过程中增删子节点
@@ -373,6 +380,42 @@ export class Island {
         return box;
     }
 
+    /** 展开态·系统通知大卡片：图标 + 标题 / 应用 + 正文 + 提示 */
+    _buildNotifyCard() {
+        const body = new St.BoxLayout({vertical: true, style_class: 'island-expanded'});
+        body.x_expand = true;
+        body.y_expand = true;
+
+        const row1 = new St.BoxLayout({style_class: 'island-row'});
+        this._notifyIconBig = new St.Icon({style_class: 'island-notify-icon-big', icon_size: 28});
+        this._notifyIconBig.y_align = Clutter.ActorAlign.CENTER;
+        const head = new St.BoxLayout({vertical: true, style_class: 'island-meta', x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER});
+        this._notifyTitleBig = makeLabel('', 'island-notify-title-big', {ellipsize: true});
+        this._notifyAppBig = makeLabel('', 'island-sub', {ellipsize: true});
+        head.add_child(this._notifyTitleBig);
+        head.add_child(this._notifyAppBig);
+        row1.add_child(this._notifyIconBig);
+        row1.add_child(head);
+
+        this._notifyBodyBig = makeLabel('', 'island-notify-body-big');
+        this._notifyBodyBig.x_expand = true;
+        this._notifyBodyBig.y_expand = true;
+        this._notifyBodyBig.clutter_text.line_wrap = true;
+        this._notifyBodyBig.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+
+        const footer = new St.BoxLayout({style_class: 'island-row'});
+        this._notifyHint = makeLabel('点击打开通知中心', 'island-foot');
+        this._notifyHint.x_expand = true;
+        this._notifyHint.x_align = Clutter.ActorAlign.END;
+        footer.add_child(this._notifyHint);
+
+        body.add_child(row1);
+        body.add_child(this._notifyBodyBig);
+        body.add_child(footer);
+        return body;
+    }
+
     _buildCollapsedMusic() {
         const box = new St.BoxLayout({style_class: 'island-collapsed'});
         box.x_expand = true;
@@ -452,8 +495,26 @@ export class Island {
     }
 
     _onNotification(source, notification) {
+        this._notifyQueue.push({source, notification});
+        // 用户正在看展开卡片时不打断操作，等收起后再展示（系统横幅仍然会弹）
+        if (!this._notificationActive && !this._expanded && !this._hover && !this.pinned)
+            this._showNextNotification();
+    }
+
+    /** 从队列取一条展示：自动展开成大卡片，停留几秒后切下一条 */
+    _showNextNotification() {
+        const item = this._notifyQueue.shift();
+        if (!item) {
+            this._notificationActive = false;
+            this._notifyExpanded = false;
+            this._notifyItem = null;
+            this._showView(this._stateKey());
+            return;
+        }
+        this._notifyItem = item;
+        const {source, notification} = item;
         this._notifyApp = String(source?.title ?? '');
-        this._notifyTitleText = String(notification?.title ?? '');
+        this._notifyTitleText = String(notification?.title ?? '') || this._notifyApp || '通知';
         this._notifyBodyText = String(notification?.body ?? '');
         let gicon = null;
         try {
@@ -471,30 +532,44 @@ export class Island {
         this._notifyGicon = gicon;
 
         this._notificationActive = true;
+        this._notifyExpanded = true;
         this._refreshNotificationView();
-        if (!this._expanded)
-            this._showView(this._stateKey());
+        this._showView(this._stateKey());
+        this._armNotificationTimer();
+    }
 
+    _armNotificationTimer(delay = NOTIFY_HOLD_MS) {
         if (this._notifyHoldTimer)
             GLib.source_remove(this._notifyHoldTimer);
-        this._notifyHoldTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, NOTIFY_HOLD_MS, () => {
+        this._notifyHoldTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
             this._notifyHoldTimer = 0;
+            if (this._hover) {   // 用户正在看，等移开再说
+                this._armNotificationTimer(2000);
+                return GLib.SOURCE_REMOVE;
+            }
             this._notificationActive = false;
-            if (!this._expanded)
-                this._showView(this._stateKey());
+            this._notifyExpanded = false;
+            this._notifyItem = null;
+            this._showNextNotification();
             return GLib.SOURCE_REMOVE;
         });
     }
 
     _refreshNotificationView() {
-        setText(this._notifyTitle, this._notifyTitleText || this._notifyApp || '通知');
-        setText(this._notifyBody, this._notifyBodyText || '');
+        const title = this._notifyTitleText || '通知';
+        const body = this._notifyBodyText || '';
+        setText(this._notifyTitle, title);
+        setText(this._notifyBody, body);
+        setText(this._notifyTitleBig, title);
+        setText(this._notifyAppBig, this._notifyApp || '');
+        setText(this._notifyBodyBig, body);
+
         const gicon = this._notifyGicon;
+        this._notifyIcon.visible = !!gicon;
+        this._notifyIconBig.visible = !!gicon;
         if (gicon) {
             this._notifyIcon.gicon = gicon;
-            this._notifyIcon.visible = true;
-        } else {
-            this._notifyIcon.visible = false;
+            this._notifyIconBig.gicon = gicon;
         }
     }
 
@@ -520,6 +595,9 @@ export class Island {
             this._notifyHoldTimer = 0;
         }
         this._notificationActive = false;
+        this._notifyExpanded = false;
+        this._notifyQueue = [];
+        this._notifyItem = null;
     }
 
     // ------------------------------------------------------------ 滚动歌词
@@ -827,8 +905,10 @@ export class Island {
     }
 
     _stateKey() {
-        if (!this._expanded && this._notificationActive)
-            return 'false:notify';
+        if (this._notificationActive) {
+            const expanded = this._expanded || this._notifyExpanded;
+            return `${expanded}:notify`;
+        }
         return `${this._expanded}:${this._stateKind()}`;
     }
 
@@ -958,6 +1038,10 @@ export class Island {
         const button = event.get_button();
         if (button === 3) {
             this._menu?.toggle();
+            return Clutter.EVENT_STOP;
+        }
+        if (button === 1 && this._notificationActive) {
+            this._openDateMenu();          // 通知中心（日期菜单里的通知列表）
             return Clutter.EVENT_STOP;
         }
         if (button === 1 && event.get_source() === this._pill) {
@@ -1205,6 +1289,10 @@ export class Island {
                 bar.y_align = Clutter.ActorAlign.END;
             });
         }
+
+        if (!this._notificationActive && this._notifyQueue.length &&
+            !this._expanded && !this._hover && !this.pinned)
+            this._showNextNotification();
 
         if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS)) {
             if (GLib.file_test(DEBUG_SHOT_MARKER, GLib.FileTest.EXISTS))

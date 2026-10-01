@@ -59,6 +59,24 @@
 
 /* ---------------------------------------------------------------- 文字 */
 
+.island-notify-icon-big {
+  min-width: 28px;
+  min-height: 28px;
+  max-width: 28px;
+  max-height: 28px;
+}
+
+.island-notify-title-big {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.island-notify-body-big {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .island-notify-title {
   font-size: 13px;
   font-weight: 700;
