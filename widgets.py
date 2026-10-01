@@ -1183,14 +1183,14 @@ class ApiCard(Card):
             text_today = text_total = "—"
         else:
             text_today = (f"${usage['today_cost']:.2f} · "
-                          f"{api_usage.fmt_tokens(usage['today_tokens'])} tok")
+                          f"{api_usage.fmt_tokens(usage['today_tokens'])} tokens")
             text_total = (f"${usage['total_cost']:.2f} · "
-                          f"{api_usage.fmt_tokens(usage['total_tokens'])} tok")
+                          f"{api_usage.fmt_tokens(usage['total_tokens'])} tokens")
         label_today = self._rows.get("today")
         label_total = self._rows.get("total")
         if label_today is not None:
             label_today.set_text(text_today)
-            label_today.set_tooltip_text(f"共 {usage['sessions']} 个会话" if usage else None)
+            label_today.set_tooltip_text(f"共 {usage['messages']} 条回复" if usage else None)
         if label_total is not None:
             label_total.set_text(text_total)
 

@@ -68,30 +68,48 @@ def _query_usage() -> dict | None:
         conn = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=2.0)
         try:
             cur = conn.cursor()
-            cur.execute("""
-                SELECT COUNT(*),
-                       COALESCE(SUM(cost), 0),
-                       COALESCE(SUM(tokens_input), 0),
-                       COALESCE(SUM(tokens_output), 0)
-                FROM session_v2""")
-            sessions, total_cost, total_in, total_out = cur.fetchone()
-            cur.execute("""
-                SELECT COALESCE(SUM(cost), 0),
-                       COALESCE(SUM(tokens_input), 0),
-                       COALESCE(SUM(tokens_output), 0)
-                FROM session_v2 WHERE time_created >= ?""", (day_start,))
-            today_cost, today_in, today_out = cur.fetchone()
+            # 优先按「逐条回复」统计（cost / tokens 带时间戳，今日口径更准确）
+            # tokens 取 input + output（不把缓存命中算进使用量）
+            try:
+                cur.execute("""
+                    SELECT COUNT(json_extract(data, '$.cost')),
+                           COALESCE(SUM(json_extract(data, '$.cost')), 0),
+                           COALESCE(SUM(json_extract(data, '$.tokens.input')), 0)
+                             + COALESCE(SUM(json_extract(data, '$.tokens.output')), 0)
+                    FROM session_message WHERE type = 'assistant'""")
+                total_messages, total_cost, total_tokens = cur.fetchone()
+                cur.execute("""
+                    SELECT COUNT(json_extract(data, '$.cost')),
+                           COALESCE(SUM(json_extract(data, '$.cost')), 0),
+                           COALESCE(SUM(json_extract(data, '$.tokens.input')), 0)
+                             + COALESCE(SUM(json_extract(data, '$.tokens.output')), 0)
+                    FROM session_message
+                    WHERE type = 'assistant' AND time_created >= ?""", (day_start,))
+                _, today_cost, today_tokens = cur.fetchone()
+            except sqlite3.Error:
+                # 老版本数据库：退回按会话统计
+                cur.execute("""
+                    SELECT COUNT(*),
+                           COALESCE(SUM(cost), 0),
+                           COALESCE(SUM(tokens_input), 0) + COALESCE(SUM(tokens_output), 0)
+                    FROM session_v2""")
+                total_messages, total_cost, total_tokens = cur.fetchone()
+                cur.execute("""
+                    SELECT COALESCE(SUM(cost), 0),
+                           COALESCE(SUM(tokens_input), 0) + COALESCE(SUM(tokens_output), 0)
+                    FROM session_v2 WHERE time_created >= ?""", (day_start,))
+                today_cost, today_tokens = cur.fetchone()
         finally:
             conn.close()
     except sqlite3.Error:
         return None
 
     return {
-        "sessions": int(sessions or 0),
+        "messages": int(total_messages or 0),
         "today_cost": float(today_cost or 0.0),
-        "today_tokens": int(today_in or 0) + int(today_out or 0),
+        "today_tokens": int(today_tokens or 0),
         "total_cost": float(total_cost or 0.0),
-        "total_tokens": int(total_in or 0) + int(total_out or 0),
+        "total_tokens": int(total_tokens or 0),
     }
 
 

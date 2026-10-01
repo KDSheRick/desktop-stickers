@@ -225,8 +225,9 @@ bash ~/desktop-stickers/enable-blur.sh
 
 右侧「API 用量」卡片显示两类信息：
 
-- **OpenCode 用量**：今日 / 累计的**花费**与 **token** 数
-  （读本地数据库 `~/.local/share/opencode/opencode.db` 的会话统计，不联网）
+- **OpenCode 用量**：今日 / 累计的**花费**与 **tokens**
+  （读本地数据库 `~/.local/share/opencode/opencode.db`，按逐条回复统计、精确到当天；
+  tokens = 输入 + 输出，不包含缓存命中，不联网）
 - **各厂商余额**：按配置查询各家的余额接口（默认 DeepSeek，**不写死任何厂商**）
 
 ### 配置厂商
