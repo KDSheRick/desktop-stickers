@@ -31,7 +31,7 @@ try {
 }
 
 const W_IDLE = 96;
-const W_MUSIC = 124;
+const W_MUSIC = 320;      // 播放中的收起态：长条胶囊，里面滚动歌词
 const W_EXPANDED = 424;
 const H_COLLAPSED = 34;
 const H_EXPANDED = 210;
@@ -41,9 +41,10 @@ const TICK_MS = 100;
 
 const WEEKDAYS = '一二三四五六日';
 
-// 开发用：把 /tmp/island-shot 里写路径就能让 Shell 自己截一张全屏图
+// 开发用开关：只有这个文件存在时，下面的 /tmp/island-shot、/tmp/island-state
+// 才会生效（避免普通使用中因为遗留的临时文件把胶囊钉在某个状态）
+const DEV_MARKER = '/tmp/island-dev';
 const DEBUG_SHOT_MARKER = '/tmp/island-shot';
-// 开发用：/tmp/island-state 写 expanded / collapsed 可以强制展开收起
 const DEBUG_STATE_MARKER = '/tmp/island-state';
 
 // ---------------------------------------------------------------- 格式化
@@ -112,6 +113,8 @@ export class Island {
         this._balances = [];
         this._eqPhase = 0;
         this._scrubbing = false;
+        this._marqueeStartId = 0;
+        this._marqueePauseId = 0;
         this._shotting = false;
 
         this._pill = null;
@@ -168,12 +171,15 @@ export class Island {
             GLib.source_remove(this._tickTimer);
             this._tickTimer = 0;
         }
-        for (const timer of [this._morphTimer, this._collapseTimer]) {
+        for (const timer of [this._morphTimer, this._collapseTimer,
+                             this._marqueeStartId, this._marqueePauseId]) {
             if (timer)
                 GLib.source_remove(timer);
         }
         this._morphTimer = 0;
         this._collapseTimer = 0;
+        this._marqueeStartId = 0;
+        this._marqueePauseId = 0;
 
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
@@ -291,20 +297,27 @@ export class Island {
     }
 
     _buildCollapsedMusic() {
-        const box = new St.BoxLayout({
-            style_class: 'island-collapsed',
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
+        const box = new St.BoxLayout({style_class: 'island-collapsed'});
         box.x_expand = true;
         box.y_expand = true;
 
         this._miniCover = new St.Bin({style_class: 'island-cover island-cover-mini'});
+        this._miniCover.y_align = Clutter.ActorAlign.CENTER;
         this._miniCoverNote = makeLabel('♪', 'island-cover-note');
         this._miniCoverNote.x_align = Clutter.ActorAlign.CENTER;
         this._miniCoverNote.y_align = Clutter.ActorAlign.CENTER;
         this._miniCover.set_child(this._miniCoverNote);
         box.add_child(this._miniCover);
+
+        // 滚动歌词：外面一层裁剪容器，里面一条不换行的文字
+        this._marqueeBox = new St.Widget({style_class: 'island-marquee', clip_to_allocation: true, x_expand: true});
+        this._marqueeBox.y_align = Clutter.ActorAlign.CENTER;
+        this._miniLyric = new St.Label({text: '', style_class: 'island-mini-lyric'});
+        this._miniLyric.clutter_text.single_line_mode = true;
+        this._miniLyric.y_align = Clutter.ActorAlign.CENTER;
+        this._miniLyricText = '';
+        this._marqueeBox.add_child(this._miniLyric);
+        box.add_child(this._marqueeBox);
 
         const bars = new St.BoxLayout({style_class: 'island-eq', y_align: Clutter.ActorAlign.CENTER});
         this._eqBars = [];
@@ -316,6 +329,63 @@ export class Island {
         }
         box.add_child(bars);
         return box;
+    }
+
+    // ------------------------------------------------------------ 滚动歌词
+
+    _updateMiniLyric(text) {
+        if (text === this._miniLyricText)
+            return;
+        this._miniLyricText = text;
+        this._miniLyric.remove_transition('x');
+        this._miniLyric.set_text(text);
+        this._marqueeStartId && GLib.source_remove(this._marqueeStartId);
+        this._marqueePauseId && GLib.source_remove(this._marqueePauseId);
+        this._marqueeStartId = 0;
+        this._marqueePauseId = 0;
+        this._miniLyric.x = 0;
+        // 等布局完成再量宽度
+        this._marqueeStartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
+            this._marqueeStartId = 0;
+            this._scrollMarquee();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _scrollMarquee() {
+        if (!this._marqueeBox || !this._miniLyric)
+            return;
+        const containerWidth = this._marqueeBox.width;
+        const textWidth = this._miniLyric.get_preferred_width()[1];
+        if (containerWidth <= 0 || textWidth <= 0) {
+            // 还没上屏，稍后再试
+            this._marqueeStartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                this._marqueeStartId = 0;
+                this._scrollMarquee();
+                return GLib.SOURCE_REMOVE;
+            });
+            return;
+        }
+        if (textWidth <= containerWidth) {
+            this._miniLyric.x = Math.round((containerWidth - textWidth) / 2);
+            return;
+        }
+        // 从右边进来，向左匀速滚出，停 1.2 秒后重来
+        this._miniLyric.x = containerWidth;
+        const distance = containerWidth + textWidth;
+        const speed = 40;   // px/s
+        this._miniLyric.ease({
+            x: -textWidth,
+            duration: Math.max(2500, Math.round(distance / speed * 1000)),
+            mode: Clutter.AnimationMode.LINEAR,
+            onComplete: () => {
+                this._marqueePauseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1200, () => {
+                    this._marqueePauseId = 0;
+                    this._scrollMarquee();
+                    return GLib.SOURCE_REMOVE;
+                });
+            },
+        });
     }
 
     _buildExpandedMusic() {
@@ -703,6 +773,12 @@ export class Island {
             }
         }
 
+        if (!music) {
+            this._miniLyricText = '';
+            this._miniLyric?.remove_transition('x');
+            this._miniLyric?.set_text('');
+        }
+
         if (hadMusic !== (music !== null))
             this._showView(`${this._expanded}:${music !== null}`);
     }
@@ -800,6 +876,7 @@ export class Island {
             const line = lineAt(this._lines, position) ||
                 [this._music.title, this._music.artist].filter(Boolean).join(' · ');
             setText(this._lyric, line);
+            this._updateMiniLyric(line);
 
             const playing = this._music.status === 'Playing';
             this._eqPhase += playing ? 0.35 : 0;
@@ -818,10 +895,12 @@ export class Island {
             });
         }
 
-        if (DEBUG_SHOT_MARKER && GLib.file_test(DEBUG_SHOT_MARKER, GLib.FileTest.EXISTS))
-            this._debugScreenshot();
-        if (DEBUG_STATE_MARKER && GLib.file_test(DEBUG_STATE_MARKER, GLib.FileTest.EXISTS))
-            this._debugState();
+        if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS)) {
+            if (GLib.file_test(DEBUG_SHOT_MARKER, GLib.FileTest.EXISTS))
+                this._debugScreenshot();
+            if (GLib.file_test(DEBUG_STATE_MARKER, GLib.FileTest.EXISTS))
+                this._debugState();
+        }
     }
 
     /** 开发用：按 /tmp/island-state 的内容强制展开 / 收起。 */

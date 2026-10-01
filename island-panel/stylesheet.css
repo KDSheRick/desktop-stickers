@@ -59,6 +59,15 @@
 
 /* ---------------------------------------------------------------- 文字 */
 
+.island-mini-lyric {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.island-marquee {
+  min-height: 16px;
+}
+
 .island-mini {
   font-size: 14px;
   font-weight: 600;
