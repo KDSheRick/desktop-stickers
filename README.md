@@ -366,8 +366,9 @@ bash install-autostart.sh --remove # 卸载
   歌词匹配不到时只显示「歌名 · 歌手」，不影响其他功能
 - 常用文件来自 GTK 的「最近使用」记录（`~/.local/share/recently-used.xbel`），
   通过 GTK 文件选择器打开过的文件才会出现在里面；纯命令行打开的文件不会记录
-- 若贴纸自身从受限沙箱环境启动（例如某些 IDE 内置终端），snap 版 Firefox 等播放器会被 AppArmor 拒绝 DBus 调用，
-  音乐卡会显示「读不到播放器」；换成桌面自启或普通终端启动即可正常
+- 若贴纸自身从受限沙箱环境启动（例如某些 IDE 内置终端 / AI 工具），snap 版 Firefox 等播放器会被 AppArmor 拒绝 DBus 调用，
+  音乐卡会显示「读不到播放器」；换成桌面自启或普通终端启动即可正常。临时恢复可以走系统用户服务：
+  `systemd-run --user --unit=sysstickers-main --collect /usr/bin/python3 $PWD/main.py`（歌词托盘同理）
 - 进程 Top 3 需要两次采样算 CPU 差值，启动后约 2 秒显示内容
 - 拖动进度条定位依赖播放器支持 MPRIS `SetPosition` / `Seek`（Firefox、多数播放器都支持）
 - 若安装了自定义 GTK 主题（`~/.config/gtk-4.0/gtk.css`），它会覆盖 `window` / `.card` / `button`
