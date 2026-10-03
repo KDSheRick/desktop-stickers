@@ -322,10 +322,12 @@ export class Island {
         const box = new St.BoxLayout({style_class: 'island-collapsed'});
         box.x_expand = true;
         box.y_expand = true;
+        // 横向 BoxLayout 里 x_align 不会居中，用两侧弹性空白顶到中间
+        box.add_child(new St.Widget({x_expand: true}));
         this._miniClock = makeLabel('--:--', 'island-mini');
-        this._miniClock.x_align = Clutter.ActorAlign.CENTER;
         this._miniClock.y_align = Clutter.ActorAlign.CENTER;
         box.add_child(this._miniClock);
+        box.add_child(new St.Widget({x_expand: true}));
         return box;
     }
 
@@ -344,6 +346,7 @@ export class Island {
         this._pausedCoverNote.x_align = Clutter.ActorAlign.CENTER;
         this._pausedCoverNote.y_align = Clutter.ActorAlign.CENTER;
         this._pausedCover.set_child(this._pausedCoverNote);
+        box.add_child(new St.Widget({x_expand: true}));
         box.add_child(this._pausedCover);
 
         const bars = new St.BoxLayout({style_class: 'island-eq', y_align: Clutter.ActorAlign.CENTER});
@@ -355,6 +358,7 @@ export class Island {
             bars.add_child(bar);
         }
         box.add_child(bars);
+        box.add_child(new St.Widget({x_expand: true}));
         return box;
     }
 
