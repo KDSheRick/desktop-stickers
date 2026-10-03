@@ -178,6 +178,7 @@ export class MediaWatcher {
         this._pollTimer = 0;
         this._polling = false;
         this._generation = 0;
+        this._trackGen = 0;        // 每换一首歌 +1：防止上一首的搜索/封面晚到覆盖新歌
 
         this._music = null;        // {player, busName, status, title, artist, album, length, canNext, canPrev, trackId}
         this._lines = [];
@@ -189,6 +190,7 @@ export class MediaWatcher {
 
     enable() {
         this._generation += 1;
+        this._trackGen += 1;
         this._session = new Soup.Session({timeout: 8});
         this._pollPlayers();
         this._pollTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, POLL_INTERVAL_MS, () => {
@@ -199,6 +201,7 @@ export class MediaWatcher {
 
     disable() {
         this._generation += 1;
+        this._trackGen += 1;
         if (this._pollTimer) {
             GLib.source_remove(this._pollTimer);
             this._pollTimer = 0;
@@ -385,6 +388,9 @@ export class MediaWatcher {
         };
         this._onMusic(this._music);
 
+        if (GLib.file_test('/tmp/island-dev', GLib.FileTest.EXISTS))
+            console.log(`[灵动岛][dbg] music title="${title}" artist="${artist}" album="${album}" ` +
+                `length=${length ? length.toFixed(1) : 0} art="${this._music.artUrl.slice(0, 70)}" player=${this._music.player}`);
         const key = `${title}|${artist}|${album}`;
         if (key !== this._trackKey) {
             this._trackKey = key;
@@ -428,7 +434,9 @@ export class MediaWatcher {
     // ------------------------------------------------------------ 歌词 / 封面
 
     _loadTrack(title, artist, album, artUrl) {
-        const generation = this._generation;
+        const generation = ++this._trackGen;
+        // 换歌立刻清掉旧封面，避免「歌切了、封面还是上一首」
+        this._onCover(null);
 
         // 封面：优先播放器给的 artUrl，其次网易云搜索结果
         if (artUrl)
@@ -442,28 +450,32 @@ export class MediaWatcher {
                 this._resolveCover(artUrl, generation);
                 return;
             }
-            if (cached.cover) {
+            if (cached.cover && cached.fresh) {
                 this._resolveCover(cached.cover, generation);
                 return;
             }
-            // 缓存里只有歌词、没有封面：继续往下走一次搜索补封面
+            // 没有封面，或封面来自旧版本（可能是大整数精度 bug 存错的图）：往下走一次搜索补/换封面
         }
 
+        let foundCover = null;
         const query = `${title} ${primaryArtist(artist)}`.trim();
         const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=10&s=' +
             encodeURIComponent(query);
 
         this._httpGetText(searchUrl, 'https://music.163.com/').then(text => {
-            if (generation !== this._generation)
+            if (generation !== this._trackGen)
                 return null;
 
             let songId = null;
             let cover = null;
             try {
-                const data = JSON.parse(text);
+                // 网易云 picId 是 17 位、超出 JS 安全整数范围：先转成字符串再解析，
+                // 否则会被舍入成另一个 id，拼出的地址会取到完全无关的图
+                const data = JSON.parse(text.replace(/"picId":\s*(\d+)/g, '"picId":"$1"'));
                 const songs = data?.result?.songs ?? [];
                 const wantedTitle = normalizeTitle(title);
                 const wantedArtist = primaryArtist(artist).toLowerCase();
+                const wantedAlbum = String(album ?? '').trim().toLowerCase();
                 let best = null;
                 let bestScore = -1;
                 for (const song of songs) {
@@ -481,6 +493,14 @@ export class MediaWatcher {
                         score += 1;
                     if (!/翻自|翻唱|cover|remix/i.test(name))
                         score += 1;
+                    // 正在听哪个版本（专辑一致）就优先取哪个版本的封面
+                    const albumName = String(song.album?.name ?? '').trim().toLowerCase();
+                    if (wantedAlbum && albumName) {
+                        if (albumName === wantedAlbum)
+                            score += 3;
+                        else if (albumName.includes(wantedAlbum) || wantedAlbum.includes(albumName))
+                            score += 1;
+                    }
                     if (score > bestScore) {
                         best = song;
                         bestScore = score;
@@ -493,6 +513,7 @@ export class MediaWatcher {
                 songId = null;
             }
 
+            foundCover = cover;
             if (!artUrl && cover)
                 this._resolveCover(cover, generation);
 
@@ -501,7 +522,7 @@ export class MediaWatcher {
 
             const lyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=-1&kv=-1&tv=-1`;
             return this._httpGetText(lyricUrl, 'https://music.163.com/').then(lyricText => {
-                if (generation !== this._generation)
+                if (generation !== this._trackGen)
                     return;
                 let lines = [];
                 try {
@@ -516,12 +537,12 @@ export class MediaWatcher {
                 this._onLyrics(this._lines);
             });
         }).catch(() => {
-            if (generation === this._generation)
-                this._fetchFromLrclib(generation, title, artist, album, artUrl);
+            if (generation === this._trackGen)
+                this._fetchFromLrclib(generation, title, artist, album, artUrl, foundCover);
         });
     }
 
-    _fetchFromLrclib(generation, title, artist, album, artUrl) {
+    _fetchFromLrclib(generation, title, artist, album, artUrl, cover = null) {
         const url = 'https://lrclib.net/api/search?' + [
             `track_name=${encodeURIComponent(title)}`,
             `artist_name=${encodeURIComponent(primaryArtist(artist))}`,
@@ -529,7 +550,7 @@ export class MediaWatcher {
         ].join('&');
 
         this._httpGetText(url, 'https://lrclib.net/').then(text => {
-            if (generation !== this._generation)
+            if (generation !== this._trackGen)
                 return;
             let lines = [];
             try {
@@ -544,7 +565,7 @@ export class MediaWatcher {
                 lines = [];
             }
             if (lines.length) {
-                this._writeCache(title, artist, lines, null);
+                this._writeCache(title, artist, lines, cover);
                 this._lines = lines;
                 this._onLyrics(this._lines);
             }
@@ -568,7 +589,7 @@ export class MediaWatcher {
         const target = url.includes('music.126.net') && !url.includes('?')
             ? `${url}?param=160y160` : url;
         this._httpGetBytes(target, 'https://music.163.com/').then(bytes => {
-            if (generation !== this._generation || !bytes?.length)
+            if (generation !== this._trackGen || !bytes?.length)
                 return;
             if (GLib.file_set_contents(path, bytes))
                 this._onCover(path);
@@ -592,11 +613,12 @@ export class MediaWatcher {
             const data = JSON.parse(new TextDecoder().decode(contents));
             let lines = Array.isArray(data) ? data : data?.lines;   // 数组 = 旧格式
             const cover = Array.isArray(data) ? null : (data?.cover ?? null);
+            const fresh = !Array.isArray(data) && data?.v === 2;    // v2 起的封面才可信
             if (!Array.isArray(lines))
                 return null;
             lines = lines.filter(line => !/^(纯音乐[，,]?\s*请欣赏|纯音乐|instrumental|请欣赏)$/i.test(
                 String(line?.text ?? '').trim()));
-            return {lines, cover};
+            return {lines, cover, fresh};
         } catch {
             // 缓存损坏直接忽略
         }
@@ -606,7 +628,7 @@ export class MediaWatcher {
     _writeCache(title, artist, lines, cover) {
         try {
             GLib.file_set_contents(this._cachePath(title, artist),
-                JSON.stringify({lines, cover}));
+                JSON.stringify({v: 2, lines, cover}));
         } catch {
             // 写不进去不影响显示
         }

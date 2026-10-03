@@ -139,7 +139,10 @@ def load_cached_track(title: str, artist: str) -> dict | None:
             return {"lines": data, "cover": None} if data else None
         lines = data.get("lines")
         if isinstance(lines, list) and lines:
-            return {"lines": lines, "cover": data.get("cover") or None}
+            cover = data.get("cover") or None
+            # v < 2 的封面可能是灵动岛（JS）大整数精度 bug 存错的图：标记可疑，需重新搜一次
+            stale = bool(cover) and data.get("v") != 2
+            return {"lines": lines, "cover": cover, "stale": stale}
     except (OSError, ValueError):
         pass
     return None
@@ -150,7 +153,7 @@ def _store(title: str, artist: str, lines: list[dict], cover: str | None = None)
         os.makedirs(_CACHE_DIR, exist_ok=True)
         path = _cache_path(title, artist)
         with open(path + ".tmp", "w", encoding="utf-8") as fh:
-            json.dump({"lines": lines, "cover": cover}, fh, ensure_ascii=False)
+            json.dump({"v": 2, "lines": lines, "cover": cover}, fh, ensure_ascii=False)
         os.replace(path + ".tmp", path)
     except OSError:
         pass
@@ -185,7 +188,7 @@ def netease_cover_url(pic_id) -> str | None:
         return None
 
 
-def _fetch_netease(title: str, artist: str) -> tuple[list[dict] | None, str | None]:
+def _fetch_netease(title: str, artist: str, album: str = "") -> tuple[list[dict] | None, str | None]:
     try:
         query = urllib.parse.quote(f"{title} {_primary_artist(artist)}".strip())
         data = json.loads(_fetch(
@@ -198,6 +201,7 @@ def _fetch_netease(title: str, artist: str) -> tuple[list[dict] | None, str | No
 
         want_title = _normalize_title(title)
         want_artist = _primary_artist(artist).casefold()
+        want_album = (album or "").strip().casefold()
         best = None
         best_score = -1
         for song in songs:
@@ -216,6 +220,13 @@ def _fetch_netease(title: str, artist: str) -> tuple[list[dict] | None, str | No
                 score += 1
             if not re.search(r"翻自|翻唱|cover|remix", name, re.I):
                 score += 1
+            # 正在听哪个版本（专辑一致）就优先取哪个版本的封面
+            album_name = str((song.get("album") or {}).get("name") or "").strip().casefold()
+            if want_album and album_name:
+                if album_name == want_album:
+                    score += 3
+                elif want_album in album_name or album_name in want_album:
+                    score += 1
             if score > best_score:
                 best, best_score = song, score
 
@@ -269,16 +280,21 @@ def fetch_track(title: str, artist: str, album: str = "") -> dict | None:
     if not title:
         return None
     cached = load_cached_track(title, artist)
-    if cached is not None:
+    if cached is not None and not cached.get("stale"):
         return cached
 
-    lines, cover = _fetch_netease(title, artist)
-    if lines is None:
+    lines, cover = _fetch_netease(title, artist, album)
+    if lines is None and cached is None:
+        # 只有全新歌曲才退到 lrclib；老歌只是补封面，沿用已有歌词
         lines, cover = _fetch_lrclib(title, artist, album)
+
     if lines:
+        if not cover and cached is not None:
+            # 搜到歌词却没拿到封面：保留旧歌词，下次再补
+            return cached
         _store(title, artist, lines, cover)
         return {"lines": lines, "cover": cover}
-    return None
+    return cached
 
 
 def fetch_lyrics(title: str, artist: str, album: str = "") -> list[dict] | None:
