@@ -18,6 +18,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {MediaWatcher, lineAt} from './media.js';
@@ -38,6 +39,9 @@ const MARQUEE_W = W_MUSIC - 24 - 22 - 16 - 20;
 const MARQUEE_SPEED = 45;   // 滚动速度（逻辑像素/秒）
 const MARQUEE_GAP = 28;     // 一圈滚完到下一圈之间的间隔
 const NOTIFY_HOLD_MS = 5000; // 通知在胶囊里停留的时长
+const W_ACTIVITY = 190;     // 收起态·实时活动（计时器/闹钟/秒表）的宽度
+const ACTIVITY_FILE = GLib.build_filenamev([
+    GLib.get_user_config_dir(), 'sysstickers', 'activities.json']);
 const W_EXPANDED = 424;
 const H_COLLAPSED = 34;
 const H_EXPANDED = 210;
@@ -120,6 +124,12 @@ export class Island {
         this._eqPhase = 0;
         this._scrubbing = false;
         this._miniLyricCycle = 0;
+        this._activity = null;          // 计时器 / 闹钟 / 秒表（同一时刻只保留一个）
+        this._activityExpanded = false; // 响铃时自动展开
+        this._dbusRetryAt = 0;
+        this._activityRingSource = null;
+        this._notifySource = null;
+        this._dbusId = 0;
         this._notificationActive = false;
         this._notifyExpanded = false;
         this._notifyQueue = [];
@@ -170,6 +180,9 @@ export class Island {
 
             this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._place(false));
             this._watchNotifications();
+            this._restoreActivities();
+            this._exportDbus();
+            this._refreshActivityView();
             this._showView(this._stateKey(), 0);
             console.log(`[灵动岛] 已启用（${this._expanded ? '展开' : '收起'}态，${W_EXPANDED}x${H_EXPANDED}）`);
         } catch (error) {
@@ -180,6 +193,15 @@ export class Island {
                 // 清理失败不掩盖原始错误
             }
             throw error;
+        }
+    }
+
+    /** 停掉一个计时器/回调但不让异常中断后续清理 */
+    _safe(fn, what) {
+        try {
+            fn();
+        } catch (error) {
+            console.warn(`[灵动岛] 清理 ${what} 失败: ${error.message}`);
         }
     }
 
@@ -196,6 +218,12 @@ export class Island {
         this._morphTimer = 0;
         this._collapseTimer = 0;
         this._miniLyricCycle = 0;
+        this._activity = null;          // 计时器 / 闹钟 / 秒表（同一时刻只保留一个）
+        this._activityExpanded = false; // 响铃时自动展开
+        this._dbusRetryAt = 0;
+        this._activityRingSource = null;
+        this._notifySource = null;
+        this._dbusId = 0;
         this._notificationActive = false;
         this._notifyExpanded = false;
         this._notifyQueue = [];
@@ -213,7 +241,19 @@ export class Island {
             this._monitorsId = 0;
         }
 
-        this._unwatchNotifications();
+        this._safe(() => this._unwatchNotifications(), '通知监听');
+        if (this._dbusId) {
+            try {
+                Gio.DBus.session.unregister_object(this._dbusId);
+            } catch (error) {
+                console.warn(`[灵动岛] 注销计时器接口失败: ${error.message}`);
+            }
+            this._dbusId = 0;
+        }
+        if (this._activityRingSource) {
+            GLib.source_remove(this._activityRingSource);
+            this._activityRingSource = 0;
+        }
         this._media?.disable();
         this._usageWatcher?.disable();
         this._media = null;
@@ -263,10 +303,12 @@ export class Island {
             'false:playing': this._buildCollapsedMusic(),
             'false:paused': this._buildCollapsedPaused(),
             'false:notify': this._buildNotifyView(),
+            'false:activity': this._buildCollapsedActivity(),
             'true:playing': this._buildExpandedMusic(),
             'true:idle': this._buildExpandedIdle(),
         };
         this._views['true:notify'] = this._buildNotifyCard();
+        this._views['true:activity'] = this._buildExpandedActivity();
         // 展开态不区分播放/暂停（只是播放按钮图标不同）
         this._views['true:paused'] = this._views['true:playing'];
         // 四个视图常驻、只切换可见性：避免在动画过程中增删子节点
@@ -281,6 +323,36 @@ export class Island {
     _buildMenu() {
         this._menu = new PopupMenu.PopupMenu(this._pill, 0.5, St.Side.TOP);
         this._menu.actor.add_style_class_name('island-menu');
+
+        // 计时器 / 闹钟 / 秒表（每次弹出时重建，带当前状态）
+        const timerMenu = new PopupMenu.PopupSubMenuMenuItem('计时器');
+        for (const minutes of [5, 10, 15, 25, 45])
+            timerMenu.menu.addAction(`${minutes} 分钟`, () => this.setTimer(minutes));
+
+        const alarmMenu = new PopupMenu.PopupSubMenuMenuItem('闹钟');
+        alarmMenu.menu.addAction('30 分钟后', () => this._setAlarmIn(30));
+        alarmMenu.menu.addAction('1 小时后', () => this._setAlarmIn(60));
+        alarmMenu.menu.addAction('明天 9:00', () => this.setAlarm('09:00'));
+
+        const stopwatchMenu = new PopupMenu.PopupSubMenuMenuItem('秒表');
+        stopwatchMenu.menu.addAction('开始 / 暂停', () => {
+            if (this._activity?.kind === 'stopwatch')
+                this.toggleStopwatch();
+            else
+                this.startStopwatch();
+        });
+        stopwatchMenu.menu.addAction('重置', () => this.resetStopwatch());
+
+        this._menu.addMenuItem(timerMenu);
+        this._menu.addMenuItem(alarmMenu);
+        this._menu.addMenuItem(stopwatchMenu);
+        if (this._activity) {
+            const cancel = new PopupMenu.PopupMenuItem(
+                this._activity.ringing ? '停止响铃' : '取消计时 / 闹钟 / 秒表');
+            cancel.connect('activate', () => this.clearActivity());
+            this._menu.addMenuItem(cancel);
+        }
+        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         const projectPath = this._readProjectPath();
         if (projectPath) {
@@ -360,6 +432,118 @@ export class Island {
         box.add_child(bars);
         box.add_child(new St.Widget({x_expand: true}));
         return box;
+    }
+
+    /** 收起态·实时活动：⏱ 24:59 */
+    _buildCollapsedActivity() {
+        const box = new St.BoxLayout({style_class: 'island-collapsed'});
+        box.x_expand = true;
+        box.y_expand = true;
+        box.add_child(new St.Widget({x_expand: true}));
+        this._actIcon = new St.Icon({style_class: 'island-act-icon', icon_size: 16});
+        this._actIcon.y_align = Clutter.ActorAlign.CENTER;
+        box.add_child(this._actIcon);
+        this._actText = makeLabel('', 'island-act-text');
+        this._actText.y_align = Clutter.ActorAlign.CENTER;
+        box.add_child(this._actText);
+        box.add_child(new St.Widget({x_expand: true}));
+        return box;
+    }
+
+    /** 展开态·实时活动卡片：大号倒计时 + 说明 + 三个按钮 */
+    _buildExpandedActivity() {
+        const body = new St.BoxLayout({vertical: true, style_class: 'island-expanded'});
+        body.x_expand = true;
+        body.y_expand = true;
+
+        this._actBig = makeLabel('', 'island-act-big');
+        this._actBig.x_align = Clutter.ActorAlign.CENTER;
+        this._actSub = makeLabel('', 'island-sub');
+        this._actSub.x_align = Clutter.ActorAlign.CENTER;
+
+        const row = new St.BoxLayout({style_class: 'island-row', y_align: Clutter.ActorAlign.CENTER});
+        row.x_expand = true;
+        row.add_child(new St.Widget({x_expand: true}));
+        this._actBtn1 = this._activityButton('', 1);
+        this._actBtn2 = this._activityButton('', 2);
+        this._actBtn3 = this._activityButton('', 3);
+        row.add_child(this._actBtn1);
+        row.add_child(this._actBtn2);
+        row.add_child(this._actBtn3);
+        row.add_child(new St.Widget({x_expand: true}));
+
+        body.add_child(new St.Widget({y_expand: true}));
+        body.add_child(this._actBig);
+        body.add_child(this._actSub);
+        body.add_child(new St.Widget({y_expand: true}));
+        body.add_child(row);
+        return body;
+    }
+
+    _activityButton(text, index) {
+        const button = new St.Button({style_class: 'island-act-btn'});
+        button.set_child(makeLabel(text, 'island-act-btn-label'));
+        button.connect('clicked', () => this._activityAction(index));
+        return button;
+    }
+
+    /** 展开卡片的按钮：按当前活动状态决定文案与动作 */
+    _activityAction(index) {
+        const act = this._activity;
+        if (!act)
+            return;
+        if (act.kind === 'timer') {
+            if (index === 1)
+                act.ringing ? this.clearActivity() : this.toggleTimer();
+            else if (index === 2)
+                this.addTimerMinute();
+            else
+                this.clearActivity();
+        } else if (act.kind === 'alarm') {
+            if (index === 1)
+                this.snoozeAlarm(5);
+            else if (index === 2)
+                this.clearActivity();
+        } else if (act.kind === 'stopwatch') {
+            if (index === 1)
+                this.toggleStopwatch();
+            else if (index === 2)
+                this.resetStopwatch();
+            else
+                this.clearActivity();
+        }
+    }
+
+    _refreshActivityView() {
+        const act = this._activity;
+        if (!this._actText)
+            return;
+
+        setText(this._actText, act ? this.activityText() : '');
+        if (this._actIcon)
+            this._actIcon.icon_name = this.activityIcon();
+        setText(this._actBig, act ? this.activityText() : '');
+        setText(this._actSub, act ? this.activitySubtitle() : '');
+
+        const specs = [];
+        if (act?.kind === 'timer') {
+            if (act.ringing)
+                specs.push(['停止', true], ['+1 分钟', true], ['', false]);
+            else
+                specs.push([act.paused ? '继续' : '暂停', true], ['+1 分钟', true], ['取消', true]);
+        } else if (act?.kind === 'alarm') {
+            specs.push(['贪睡 5 分钟', true], ['关闭', true], ['', false]);
+        } else if (act?.kind === 'stopwatch') {
+            specs.push([act.running ? '暂停' : '继续', true], ['重置', true], ['取消', true]);
+        } else {
+            specs.push(['', false], ['', false], ['', false]);
+        }
+        for (const [index, button] of [this._actBtn1, this._actBtn2, this._actBtn3].entries()) {
+            const [text, visible] = specs[index];
+            button.visible = visible;
+            if (visible)
+                setText(button.get_child(), text);
+        }
     }
 
     /** 收起态·系统通知：[应用图标] 标题 正文 */
@@ -466,6 +650,377 @@ export class Island {
         }
         box.add_child(bars);
         return box;
+    }
+
+    // ------------------------------------------------- 计时器 / 闹钟 / 秒表
+
+    _now() {
+        return Date.now() / 1000;
+    }
+
+    _fmtClock(seconds) {
+        const total = Math.max(0, Math.ceil(seconds));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        if (h > 0)
+            return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        return `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    _fmtStopwatch(seconds) {
+        const total = Math.max(0, seconds);
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return `${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`;
+    }
+
+    hasActivity() {
+        return this._activity !== null;
+    }
+
+    /** 当前活动的显示文本（收起态用） */
+    activityText() {
+        const act = this._activity;
+        if (!act)
+            return '';
+        if (act.kind === 'timer')
+            return act.ringing ? '时间到' : this._fmtClock(act.remaining ?? 0);
+        if (act.kind === 'alarm')
+            return act.ringing ? '时间到' : act.label;
+        if (act.kind === 'stopwatch')
+            return this._fmtStopwatch(act.elapsed ?? 0);
+        return '';
+    }
+
+    activityIcon() {
+        const act = this._activity;
+        if (!act)
+            return 'alarm-symbolic';
+        if (act.kind === 'timer')
+            return 'timer-symbolic';
+        if (act.kind === 'alarm')
+            return 'alarm-symbolic';
+        return 'stopwatch-symbolic';
+    }
+
+    activitySubtitle() {
+        const act = this._activity;
+        if (!act)
+            return '';
+        if (act.kind === 'timer')
+            return act.ringing ? '计时器时间到' : `计时器 · 共 ${this._fmtClock(act.total)}`;
+        if (act.kind === 'alarm')
+            return act.ringing ? '闹钟响了' : `闹钟 · ${act.label}`;
+        return act.running ? '秒表 · 计时中' : '秒表 · 已暂停';
+    }
+
+    // ---- 设置 ----
+
+    setTimer(minutes) {
+        const total = Math.max(1, Math.round(Number(minutes) || 1)) * 60;
+        this._activityExpanded = false;
+        this._activity = {
+            kind: 'timer', total,
+            endsAt: this._now() + total,
+            remaining: total,
+            paused: false,
+            ringing: false,
+        };
+        this._activityChanged();
+    }
+
+    toggleTimer() {
+        const act = this._activity;
+        if (!act || act.kind !== 'timer' || act.ringing)
+            return;
+        if (act.paused) {
+            act.paused = false;
+            act.endsAt = this._now() + (act.remaining ?? 0);
+        } else {
+            act.paused = true;
+            act.remaining = Math.max(0, act.endsAt - this._now());
+        }
+        this._activityChanged();
+    }
+
+    addTimerMinute() {
+        const act = this._activity;
+        if (!act || act.kind !== 'timer')
+            return;
+        if (act.ringing) {
+            act.ringing = false;
+            this._activityExpanded = false;
+            act.paused = false;
+            act.total = 60;
+            act.remaining = 60;
+            act.endsAt = this._now() + 60;
+        } else if (act.paused) {
+            act.remaining = (act.remaining ?? 0) + 60;
+            act.total += 60;
+        } else {
+            act.endsAt += 60;
+            act.total += 60;
+        }
+        this._activityChanged();
+    }
+
+    clearActivity() {
+        if (this._activityRingSource) {
+            GLib.source_remove(this._activityRingSource);
+            this._activityRingSource = 0;
+        }
+        this._activity = null;
+        this._activityExpanded = false;
+        this._activityChanged();
+    }
+
+    /** 设置闹钟：time 形如 "HH:MM"，已过则顺延到明天 */
+    setAlarm(time) {
+        const match = /^(\d{1,2}):(\d{2})$/.exec(String(time ?? '').trim());
+        if (!match)
+            return false;
+        const now = new Date();
+        const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(),
+            Number(match[1]), Number(match[2]), 0, 0);
+        if (at.getTime() <= now.getTime())
+            at.setDate(at.getDate() + 1);
+        this._activityExpanded = false;
+        this._activity = {
+            kind: 'alarm',
+            at: at.getTime() / 1000,
+            label: `${String(match[1]).padStart(2, '0')}:${match[2]}`,
+            ringing: false,
+        };
+        this._activityChanged();
+        return true;
+    }
+
+    /** 相对当前时间设置闹钟（N 分钟后） */
+    _setAlarmIn(minutes) {
+        const at = new Date(Date.now() + Math.max(1, minutes) * 60000);
+        this._activityExpanded = false;
+        this._activity = {
+            kind: 'alarm',
+            at: at.getTime() / 1000,
+            label: `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`,
+            ringing: false,
+        };
+        this._activityChanged();
+    }
+
+    snoozeAlarm(minutes = 5) {
+        const act = this._activity;
+        if (!act || act.kind !== 'alarm')
+            return;
+        act.ringing = false;
+        this._activityExpanded = false;
+        act.at = this._now() + Math.max(1, minutes) * 60;
+        const d = new Date(act.at * 1000);
+        act.label = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        this._activityChanged();
+    }
+
+    startStopwatch() {
+        if (this._activity?.kind === 'stopwatch' && this._activity.running)
+            return;
+        const acc = this._activity?.kind === 'stopwatch' ? (this._activity.accumulated ?? 0) : 0;
+        this._activityExpanded = false;
+        this._activity = {kind: 'stopwatch', running: true, startedAt: this._now(), accumulated: acc, elapsed: acc};
+        this._activityChanged();
+    }
+
+    toggleStopwatch() {
+        const act = this._activity;
+        if (!act || act.kind !== 'stopwatch')
+            return;
+        if (act.running) {
+            act.accumulated = act.elapsed ?? 0;
+            act.running = false;
+        } else {
+            act.running = true;
+            act.startedAt = this._now();
+        }
+        this._activityChanged();
+    }
+
+    resetStopwatch() {
+        if (this._activity?.kind !== 'stopwatch')
+            return;
+        this._activity.accumulated = 0;
+        this._activity.elapsed = 0;
+        this._activity.startedAt = this._now();
+        this._activityChanged();
+    }
+
+    // ---- 每次 tick 更新 / 触发 ----
+
+    _activityTick() {
+        const act = this._activity;
+        if (!act)
+            return;
+        const now = this._now();
+        if (act.kind === 'timer') {
+            if (!act.paused)
+                act.remaining = Math.max(0, act.endsAt - now);
+            if (!act.paused && act.remaining <= 0 && !act.ringing)
+                this._activityRing();
+        } else if (act.kind === 'alarm') {
+            if (now >= act.at && !act.ringing)
+                this._activityRing();
+        } else if (act.kind === 'stopwatch') {
+            act.elapsed = (act.accumulated ?? 0) + (act.running ? now - act.startedAt : 0);
+        }
+        this._refreshActivityView();
+    }
+
+    /** 时间到：发系统通知（岛里也会显示）+ 响一声 + 自动展开 */
+    _activityRing() {
+        const act = this._activity;
+        if (!act)
+            return;
+        act.ringing = true;
+        this._activityExpanded = true;
+        const title = act.kind === 'timer' ? '计时器时间到' : '闹钟响了';
+        const body = act.kind === 'timer'
+            ? `已过去 ${this._fmtClock(act.total)}`
+            : `${act.label} 的闹钟`;
+        this._postNotification(title, body, 'alarm-symbolic');
+        try {
+            global.display.get_sound_player().play_from_theme(
+                'alarm-clock-elapsed', 'Timer', null);
+        } catch (error) {
+            console.log(`[灵动岛] 播放铃声失败: ${error.message}`);
+        }
+        this._activityChanged();
+    }
+
+    _activityChanged() {
+        this._refreshActivityView();
+        this._showView(this._stateKey());
+        this._saveActivities();
+    }
+
+    /** 用 MessageTray 发一条系统通知（会经过岛自己的通知流程） */
+    _postNotification(title, body, iconName = 'dialog-information-symbolic') {
+        try {
+            if (!this._notifySource) {
+                this._notifySource = new MessageTray.Source({title: '灵动岛', iconName});
+                Main.messageTray.add(this._notifySource);
+            }
+            const notification = new MessageTray.Notification({
+                source: this._notifySource,
+                title,
+                body,
+            });
+            this._notifySource.addNotification(notification);
+        } catch (error) {
+            console.warn(`[灵动岛] 发通知失败: ${error.message}`);
+        }
+    }
+
+    // ---- 持久化（重启扩展后仍在）----
+
+    _saveActivities() {
+        try {
+            const dir = GLib.path_get_dirname(ACTIVITY_FILE);
+            GLib.mkdir_with_parents(dir, 0o755);
+            const data = this._activity ? {...this._activity} : null;
+            GLib.file_set_contents(ACTIVITY_FILE, JSON.stringify(data));
+        } catch (error) {
+            console.warn(`[灵动岛] 保存活动失败: ${error.message}`);
+        }
+    }
+
+    _restoreActivities() {
+        try {
+            const [ok, contents] = GLib.file_get_contents(ACTIVITY_FILE);
+            if (!ok)
+                return;
+            const data = JSON.parse(new TextDecoder().decode(contents));
+            if (!data || typeof data !== 'object' || !data.kind)
+                return;
+            // 时间已过：计时器/闹钟直接进入“响了”状态
+            const now = this._now();
+            if (data.kind === 'timer') {
+                data.remaining = data.paused ? (data.remaining ?? 0) : Math.max(0, (data.endsAt ?? 0) - now);
+                if (!data.paused && data.remaining <= 0)
+                    data.ringing = true;
+            } else if (data.kind === 'alarm') {
+                if (now >= (data.at ?? 0))
+                    data.ringing = true;
+            }
+            this._activity = data;
+        } catch {
+            // 没有记录或损坏：忽略
+        }
+    }
+
+    // ---- D-Bus 控制接口（方便命令行/脚本设置）----
+
+    _exportDbus() {
+        const xml = `<node><interface name="com.loong.IslandActivities">
+          <method name="SetTimer"><arg type="u" direction="in" name="minutes"/></method>
+          <method name="ToggleTimer"/>
+          <method name="AddMinute"/>
+          <method name="SetAlarm"><arg type="s" direction="in" name="time"/></method>
+          <method name="SnoozeAlarm"/>
+          <method name="StartStopwatch"/>
+          <method name="ToggleStopwatch"/>
+          <method name="ResetStopwatch"/>
+          <method name="ClearAll"/>
+          <method name="GetState"><arg type="s" direction="out" name="json"/></method>
+        </interface></node>`;
+        try {
+            const node = Gio.DBusNodeInfo.new_for_xml(xml);
+            this._dbusId = Gio.DBus.session.register_object(
+                '/com/loong/IslandActivities', node.interfaces[0],
+                (_conn, _sender, _path, _iface, method, params, invocation) => {
+                    try {
+                        this._handleDbus(method, params, invocation);
+                    } catch (error) {
+                        invocation.return_dbus_error('com.loong.Island.Error', error.message);
+                    }
+                }, null, null);
+            Gio.bus_own_name(Gio.BusType.SESSION, 'com.loong.IslandActivities',
+                Gio.BusNameOwnerFlags.NONE, null, null, null);
+            this._dbusRetryAt = 0;
+            this._dbusRetries = 0;
+        } catch (error) {
+            console.warn(`[灵动岛] 计时器接口暂时不可用（可能是上一个扩展实例还没释放，`
+                + `下次登录后恢复）：${error.message}`);
+            // 30 秒后重试，最多 3 次（正常情况 disable 已注销，不会走到这里）
+            this._dbusRetries = (this._dbusRetries ?? 0) + 1;
+            this._dbusRetryAt = this._dbusRetries <= 3 ? this._now() + 30 : 0;
+        }
+    }
+
+    _handleDbus(method, params, invocation) {
+        const args = params ? params.deep_unpack() : [];
+        switch (method) {
+        case 'SetTimer': this.setTimer(args[0]); break;
+        case 'ToggleTimer': this.toggleTimer(); break;
+        case 'AddMinute': this.addTimerMinute(); break;
+        case 'SetAlarm': this.setAlarm(args[0]); break;
+        case 'SnoozeAlarm': this.snoozeAlarm(5); break;
+        case 'StartStopwatch': this.startStopwatch(); break;
+        case 'ToggleStopwatch': this.toggleStopwatch(); break;
+        case 'ResetStopwatch': this.resetStopwatch(); break;
+        case 'ClearAll': this.clearActivity(); break;
+        case 'GetState': {
+            const act = this._activity;
+            const state = act ? {
+                kind: act.kind,
+                text: this.activityText(),
+                subtitle: this.activitySubtitle(),
+                ringing: !!act.ringing,
+            } : null;
+            invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(state)]));
+            return;
+        }
+        default: break;
+        }
+        invocation.return_value(null);
     }
 
     // ------------------------------------------------------------ 系统通知
@@ -598,6 +1153,12 @@ export class Island {
             GLib.source_remove(this._notifyHoldTimer);
             this._notifyHoldTimer = 0;
         }
+        this._activity = null;          // 计时器 / 闹钟 / 秒表（同一时刻只保留一个）
+        this._activityExpanded = false; // 响铃时自动展开
+        this._dbusRetryAt = 0;
+        this._activityRingSource = null;
+        this._notifySource = null;
+        this._dbusId = 0;
         this._notificationActive = false;
         this._notifyExpanded = false;
         this._notifyQueue = [];
@@ -913,6 +1474,10 @@ export class Island {
             const expanded = this._expanded || this._notifyExpanded;
             return `${expanded}:notify`;
         }
+        if (this._activity) {
+            const expanded = this._expanded || this._activityExpanded;
+            return `${expanded}:activity`;
+        }
         return `${this._expanded}:${this._stateKind()}`;
     }
 
@@ -926,6 +1491,8 @@ export class Island {
             return [W_PAUSED, H_COLLAPSED];
         if (kind === 'notify')
             return [W_MUSIC, H_COLLAPSED];
+        if (kind === 'activity')
+            return [W_ACTIVITY, H_COLLAPSED];
         return [W_IDLE, H_COLLAPSED];
     }
 
@@ -1292,6 +1859,33 @@ export class Island {
                 bar.set_size(3, Math.max(3, Math.round(14 * value)));
                 bar.y_align = Clutter.ActorAlign.END;
             });
+        }
+
+        this._activityTick();
+
+        // D-Bus 注册失败后的重试
+        if (!this._dbusId && this._dbusRetryAt && this._now() >= this._dbusRetryAt) {
+            this._dbusRetryAt = 0;
+            this._exportDbus();
+        }
+
+        // 开发用：/tmp/island-activity 写 "timer 1" / "alarm 07:30" / "stopwatch" / "clear"
+        if (GLib.file_test(DEV_MARKER, GLib.FileTest.EXISTS) &&
+            GLib.file_test('/tmp/island-activity', GLib.FileTest.EXISTS)) {
+            try {
+                const [ok, contents] = GLib.file_get_contents('/tmp/island-activity');
+                Gio.File.new_for_path('/tmp/island-activity').delete(null);
+                if (ok) {
+                    const cmd = new TextDecoder().decode(contents).trim();
+                    const [what, arg] = cmd.split(/\s+/);
+                    if (what === 'timer') this.setTimer(Number(arg) || 1);
+                    else if (what === 'alarm') this.setAlarm(arg);
+                    else if (what === 'stopwatch') this.startStopwatch();
+                    else if (what === 'clear') this.clearActivity();
+                }
+            } catch {
+                // 忽略
+            }
         }
 
         if (!this._notificationActive && this._notifyQueue.length &&

@@ -115,6 +115,14 @@ A pure-black capsule centered at the top: **hover to expand, move away → colla
   center; hovering pauses the countdown
   - To show them *only* in the island (no GNOME banners):
     `gsettings set org.gnome.desktop.notifications show-banners false`
+- **Live activities** (right-click menu, or scriptable via D-Bus):
+  - **Timer**: 5/10/15/25/45 min; countdown in the capsule, expanded card offers
+    pause / +1 min / cancel; ringing auto-expands with a notification and a sound
+  - **Alarm**: in 30 min / in 1 hour / tomorrow 9:00; snooze 5 min or dismiss when ringing
+  - **Stopwatch**: start / pause / reset
+  - Persisted across extension reloads; D-Bus API (`com.loong.IslandActivities`):
+    `SetTimer(minutes)` `ToggleTimer` `AddMinute` `SetAlarm("HH:MM")` `SnoozeAlarm`
+    `StartStopwatch` `ToggleStopwatch` `ResetStopwatch` `ClearAll` `GetState`
 - Expanded (playing): cover / title / artist / draggable progress bar / prev · play · next /
   current lyric
 - Expanded (idle): large clock + date, today's cost / tokens / total, 7-day mini bar chart

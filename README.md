@@ -221,6 +221,14 @@ bash ~/desktop-stickers/enable-blur.sh
   - 想只让灵动岛显示、不要系统的通知横幅：
     `gsettings set org.gnome.desktop.notifications show-banners false`
     （通知仍会进入通知中心，不会丢；恢复就把 `false` 改回 `true`）
+- **实时活动**（右键菜单，或用 D-Bus 脚本化）：
+  - **计时器**：5 / 10 / 15 / 25 / 45 分钟；收起态显示倒计时，展开卡片可「暂停 / +1 分钟 / 取消」；
+    时间到自动展开响铃 + 系统通知 + 提示音
+  - **闹钟**：30 分钟后 / 1 小时后 / 明天 9:00；响铃后可「贪睡 5 分钟 / 关闭」
+  - **秒表**：开始 / 暂停 / 重置
+  - 状态会持久化，扩展重载后仍在；命令行接口（`com.loong.IslandActivities`）：
+    `SetTimer(minutes)` `ToggleTimer` `AddMinute` `SetAlarm("HH:MM")` `SnoozeAlarm`
+    `StartStopwatch` `ToggleStopwatch` `ResetStopwatch` `ClearAll` `GetState`
 - 展开态（播放中）：封面 / 歌名 / 歌手 / 可拖动进度条 / 上一曲 · 播放 · 下一曲 / 当前歌词
 - 展开态（闲置）：大时钟 + 日期，今日花费 / tokens / 累计，近 7 天柱状图与厂商余额
 

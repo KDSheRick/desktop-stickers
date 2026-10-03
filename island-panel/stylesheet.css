@@ -233,3 +233,38 @@
 .island-play:hover {
   background-color: rgba(255, 255, 255, 0.85);
 }
+
+/* ---------------------------------------------------------------- 实时活动（计时器/闹钟/秒表）*/
+
+.island-act-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  font-feature-settings: "tnum" 1;
+}
+
+.island-act-icon {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.island-act-big {
+  font-size: 40px;
+  font-weight: 300;
+  color: #ffffff;
+  font-feature-settings: "tnum" 1;
+}
+
+.island-act-btn {
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  padding: 6px 14px;
+}
+
+.island-act-btn:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.island-act-btn-label {
+  font-size: 12px;
+}
