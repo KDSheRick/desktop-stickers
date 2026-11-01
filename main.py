@@ -41,6 +41,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 from collectors import SystemStats, fmt_bytes, fmt_uptime  # noqa: E402
 from lyrics_tray import CONTROL_NAME  # noqa: E402
 import settings  # noqa: E402
+import stickers_ctl  # noqa: E402
 from positioner import (  # noqa: E402
     X11Mover,
     clamp_position,
@@ -630,6 +631,10 @@ class StickerApp(Gtk.Application):
         control.connect("activate", self._on_open_control)
         self.add_action(control)
 
+        quit_action = Gio.SimpleAction.new("quit", None)
+        quit_action.connect("activate", self._on_quit)
+        self.add_action(quit_action)
+
         # 顶栏歌词插件开关（勾选状态跟随插件进程）
         self._lyrics_action = Gio.SimpleAction.new_stateful(
             "toggle-lyrics", None, GLib.Variant("b", False))
@@ -659,6 +664,11 @@ class StickerApp(Gtk.Application):
             [sys.executable, os.path.join(BASE_DIR, "control.py")],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
+
+    def _on_quit(self, *_args) -> None:
+        """退出贴纸，并记住「关闭」状态（下次开机不会自动拉起）。"""
+        stickers_ctl.store_enabled(False)
+        self.quit()
 
     def _root_boxes(self) -> list[Gtk.Box]:
         roots = [window.root_box for window in self.windows.values()]
@@ -766,6 +776,14 @@ class StickerApp(Gtk.Application):
 
 
 def main() -> int:
+    # 开机自启遵循总开关的上次状态；手动启动则视为「开启」
+    if "--autostart" in sys.argv[1:]:
+        sys.argv = [arg for arg in sys.argv if arg != "--autostart"]
+        if not stickers_ctl.load_enabled():
+            return 0
+    else:
+        stickers_ctl.store_enabled(True)
+
     GLib.set_application_name("系统贴纸")
     GLib.set_prgname("sysstickers")
     return StickerApp().run(sys.argv)

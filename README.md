@@ -6,6 +6,7 @@
 左侧 8 张系统监控（含温度风扇、系统信息宽卡）+ 右侧 3 张（音乐 / 常用文件 / 进程），
 每张贴纸是一个独立的圆角玻璃窗口，配合 GNOME 的 **Blur my Shell** 扩展，背后是真正被模糊的桌面背景。
 另有**顶栏歌词插件**：可单独开关，播放音乐时在 GNOME 顶栏显示当前歌词句。
+还有**顶栏总开关**：一键显示 / 隐藏全部桌面贴纸。
 
 项目主页：<https://github.com/KDSheRick/desktop-stickers>
 
@@ -52,8 +53,8 @@ cd desktop-stickers
 bash install.sh
 ```
 
-脚本会自动完成：**依赖检查 → 加入开机自启 → 创建应用菜单快捷方式（贴纸 / 顶栏歌词 / 贴纸设置）
-→ 启动贴纸与顶栏歌词 → 若已安装 GNOME Rounded Blur 库则自动开启背景模糊**。
+脚本会自动完成：**依赖检查 → 加入开机自启 → 创建应用菜单快捷方式（贴纸 / 顶栏歌词 / 贴纸开关 / 贴纸设置）
+→ 启动贴纸、顶栏歌词与顶栏开关 → 若已安装 GNOME Rounded Blur 库则自动开启背景模糊**。
 
 ```bash
 bash install.sh --remove   # 卸载（自启动与菜单快捷方式）
@@ -135,7 +136,7 @@ bash ~/desktop-stickers/enable-blur.sh
 | 圆角 | 0–40 | 同时**自动同步 Blur my Shell 的模糊圆角**（圆角 + 9），保持内外同心 |
 | 玻璃不透明度 | 0.15–0.98 | 深色玻璃的不透明度（浅色玻璃自动 +0.13） |
 | 卡片间距 / 屏幕边距 | 0–80 / 0–300 | 整组贴纸的排布位置 |
-| 深色玻璃 / 顶栏歌词 | 开关 | 主题切换与歌词插件开关 |
+| 深色玻璃 / 顶栏歌词 / 桌面贴纸 | 开关 | 主题切换、歌词插件与贴纸总开关 |
 | 复位贴纸位置 | 按钮 | 清空拖动记忆，回到默认排布 |
 
 所有改动**实时生效**（设置写在 `~/.config/sysstickers/settings.json`，主程序监听文件并立即应用），
@@ -160,7 +161,8 @@ bash ~/desktop-stickers/enable-blur.sh
 ## 交互
 
 - **拖动**：按住任意贴纸空白处拖动，移动这一张贴纸
-- **右键菜单**：复位全部贴纸 / 切换深浅玻璃 / 退出
+- **右键菜单**：复位全部贴纸 / 切换深浅玻璃 / 顶栏歌词 / 贴纸设置 / 退出
+  （「退出」= 关闭贴纸并记住状态，可用顶栏开关或应用菜单重新打开）
 - **常用文件**（最近经常打开的文件，数据来自 GTK 的「最近使用」记录）：
   - **双击**一行 → 用默认程序打开该文件
   - **右键一行** → 打开 / 在文件管理器中显示 / 复制路径
@@ -205,6 +207,30 @@ bash ~/desktop-stickers/enable-blur.sh
 
 开关状态保存在 `~/.config/sysstickers/lyrics-tray.json`；开机自启会读取该状态，
 **关掉之后重启系统也不会自己回来**。插件日志在 `~/.cache/sysstickers/lyrics-tray.log`。
+
+## 桌面贴纸总开关（顶栏）
+
+顶栏会有一个**眼睛图标**（`stickers_switch.py`，与贴纸、歌词都是独立进程）：
+
+- **单击图标** = 一键显示 / 隐藏全部贴纸（隐藏 = 贴纸进程退出，省 CPU 与内存）
+- **右键菜单**：显示桌面贴纸（勾选状态）/「贴纸设置…」/「退出顶栏开关」
+  （退出开关只收起图标，不影响贴纸；应用菜单里的「贴纸 开/关」可重新召回）
+- **应用菜单**（GNOME 活动 → 搜索「贴纸 开/关」）：等效的一键切换
+- 图标状态：睁眼 = 贴纸显示中；闭眼 = 已隐藏
+
+状态会被记住（`~/.config/sysstickers/stickers.json`），开机自启会沿用：
+**关掉之后重启系统也不会自己回来**。命令行：
+
+```bash
+python3 stickers_switch.py --toggle   # 开 / 关
+python3 stickers_switch.py --start    # 打开（并确保顶栏开关在线）
+python3 stickers_switch.py --stop     # 关闭
+python3 stickers_switch.py --status   # 查看状态（running / stopped）
+python3 stickers_switch.py --quit     # 只退出顶栏开关图标
+```
+
+> 从任意贴纸右键菜单点「退出」，等同于关闭总开关（同样会被记住）；
+> 设置窗口（`control.py`）顶部也有「桌面贴纸」开关，效果相同。
 
 ## 灵动岛（GNOME Shell 扩展）
 
@@ -388,6 +414,8 @@ desktop-stickers/
 ├── positioner.py         # X11 窗口定位与位置记忆
 ├── lyrics.py             # 歌词获取解析（网易云优先，lrclib 兜底）
 ├── lyrics_tray.py        # 顶栏歌词插件（独立进程，可单独启停）
+├── stickers_ctl.py       # 总开关的进程控制（启动 / 关闭 / 状态记忆）
+├── stickers_switch.py    # 顶栏总开关图标（独立进程，一键显示 / 隐藏）
 ├── covers.py             # 专辑封面下载与顶栏图标位图
 ├── recent.py             # 「最近使用文件」解析
 ├── style.css             # 毛玻璃主题（颜色 / 圆角 / 阴影）

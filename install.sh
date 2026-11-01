@@ -16,6 +16,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     bash "$DIR/install-autostart.sh" --remove
     if [ -n "$PYTHON" ]; then
         "$PYTHON" "$DIR/lyrics_tray.py" --stop >/dev/null 2>&1 || true
+        "$PYTHON" "$DIR/stickers_switch.py" --quit >/dev/null 2>&1 || true
     fi
     green "已移除开机自启与菜单快捷方式（贴纸还在运行的话，右键菜单 →「退出」）"
     exit 0
@@ -62,13 +63,14 @@ green "✓ 依赖检查通过"
 
 # ---------------------------------------------------------------- 2. 自启动 + 菜单
 bash "$DIR/install-autostart.sh" >/dev/null
-green "✓ 已加入开机自启（贴纸 + 顶栏歌词），并创建应用菜单快捷方式"
+green "✓ 已加入开机自启（贴纸 + 顶栏歌词 + 顶栏开关），并创建应用菜单快捷方式"
 
 # ---------------------------------------------------------------- 3. 启动
 setsid nohup "$PYTHON" "$DIR/main.py" >/tmp/sysstickers-start.log 2>&1 < /dev/null &
 sleep 2
 "$PYTHON" "$DIR/lyrics_tray.py" --start >/dev/null 2>&1 || true
-green "✓ 贴纸与顶栏歌词已启动"
+"$PYTHON" "$DIR/stickers_switch.py" --start >/dev/null 2>&1 || true
+green "✓ 贴纸、顶栏歌词与顶栏开关已启动"
 
 # ---------------------------------------------------------------- 4. 背景模糊（可选）
 if "$PYTHON" -c "import gi; gi.require_version('Blur', '1.0'); from gi.repository import Blur" 2>/dev/null \
@@ -91,5 +93,6 @@ echo
 green "安装完成 🎉"
 echo "  · 调整外观（尺寸 / 圆角 / 不透明度 / 位置）："
 echo "      应用菜单搜索「贴纸设置」，或右键任意贴纸 →「贴纸设置…」"
+echo "  · 贴纸总开关：单击顶栏的「眼睛」图标，或应用菜单搜索「贴纸 开/关」"
 echo "  · 顶栏歌词开关：右键贴纸菜单，或控制器里的「顶栏歌词」"
 echo "  · 卸载：bash install.sh --remove"

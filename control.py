@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 
 import gi
@@ -21,6 +23,7 @@ from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 import lyrics_tray  # noqa: E402
 import settings  # noqa: E402
+import stickers_ctl  # noqa: E402
 
 APP_ID = "com.loong.SysStickersControl"
 
@@ -73,14 +76,23 @@ class ControlWindow(Gtk.ApplicationWindow):
         switches = Gtk.Grid(column_spacing=14, row_spacing=10)
         root.append(switches)
 
+        stickers_label = Gtk.Label(label="桌面贴纸")
+        stickers_label.set_halign(Gtk.Align.START)
+        self._stickers_switch = Gtk.Switch()
+        self._stickers_switch.set_active(stickers_ctl.is_running())
+        self._stickers_switch.set_halign(Gtk.Align.START)
+        self._stickers_switch.connect("notify::active", self._on_stickers_toggled)
+        switches.attach(stickers_label, 0, 0, 1, 1)
+        switches.attach(self._stickers_switch, 1, 0, 1, 1)
+
         dark_label = Gtk.Label(label="深色玻璃")
         dark_label.set_halign(Gtk.Align.START)
         self._dark_switch = Gtk.Switch()
         self._dark_switch.set_active(bool(self.values.get("dark", True)))
         self._dark_switch.set_halign(Gtk.Align.START)
         self._dark_switch.connect("notify::active", self._on_dark_toggled)
-        switches.attach(dark_label, 0, 0, 1, 1)
-        switches.attach(self._dark_switch, 1, 0, 1, 1)
+        switches.attach(dark_label, 0, 1, 1, 1)
+        switches.attach(self._dark_switch, 1, 1, 1, 1)
 
         lyrics_label = Gtk.Label(label="顶栏歌词")
         lyrics_label.set_halign(Gtk.Align.START)
@@ -88,8 +100,8 @@ class ControlWindow(Gtk.ApplicationWindow):
         self._lyrics_switch.set_active(lyrics_tray.is_running())
         self._lyrics_switch.set_halign(Gtk.Align.START)
         self._lyrics_switch.connect("notify::active", self._on_lyrics_toggled)
-        switches.attach(lyrics_label, 0, 1, 1, 1)
-        switches.attach(self._lyrics_switch, 1, 1, 1, 1)
+        switches.attach(lyrics_label, 0, 2, 1, 1)
+        switches.attach(self._lyrics_switch, 1, 2, 1, 1)
 
         reset = Gtk.Button(label="复位贴纸位置")
         reset.set_halign(Gtk.Align.START)
@@ -128,6 +140,17 @@ class ControlWindow(Gtk.ApplicationWindow):
         self.values[key] = value
         self._queue_save()
 
+    def _on_stickers_toggled(self, switch: Gtk.Switch, _param) -> None:
+        if self._syncing:
+            return
+        # 启停涉及等待进程退出 / 启动，放到子进程里做，避免设置窗口卡住
+        flag = "--start" if switch.get_active() else "--stop"
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stickers_switch.py")
+        subprocess.Popen(
+            [sys.executable, script, flag],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+
     def _on_dark_toggled(self, switch: Gtk.Switch, _param) -> None:
         if self._syncing:
             return
@@ -150,6 +173,9 @@ class ControlWindow(Gtk.ApplicationWindow):
         """同步外部变化（不打断正在拖动的滑块）。"""
         self._syncing = True
         try:
+            running = stickers_ctl.is_running()
+            if self._stickers_switch.get_active() != running:
+                self._stickers_switch.set_active(running)
             running = lyrics_tray.is_running()
             if self._lyrics_switch.get_active() != running:
                 self._lyrics_switch.set_active(running)

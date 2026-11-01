@@ -46,8 +46,8 @@ bash install.sh
 ```
 
 The script checks dependencies, adds autostart, creates app-menu shortcuts
-(Stickers / Lyrics / Settings), starts everything, and enables real background
-blur if the GNOME Rounded Blur library is present.
+(Stickers / Lyrics / Sticker switch / Settings), starts everything, and enables real
+background blur if the GNOME Rounded Blur library is present.
 
 ```bash
 bash install.sh --remove   # remove autostart + menu shortcuts
@@ -61,7 +61,8 @@ python3 main.py
 ```
 
 Drag any sticker to move it (positions are remembered). Right-click any sticker for
-the menu: reset layout / toggle dark-light / toggle the top-bar lyrics / **settings** / quit.
+the menu: reset layout / toggle dark-light / toggle the top-bar lyrics / **settings** / quit
+(quit = turn stickers off and remember it).
 
 ## Settings controller
 
@@ -74,7 +75,7 @@ Open it from **any sticker's right-click menu → 贴纸设置…**, or search f
 | Corner radius | 0–40 | automatically syncs Blur my Shell's corner radius (radius + 9) so inner/outer corners stay concentric |
 | Glass opacity | 0.15–0.98 | dark glass opacity (light glass uses +0.13) |
 | Card gap / screen margins | — | position of the whole layout |
-| Dark glass / Top-bar lyrics | switches | theme and plugin toggles |
+| Dark glass / Top-bar lyrics / Desktop stickers | switches | theme, plugin and master switches |
 | Reset positions | button | clears drag memory and re-applies the layout |
 
 Changes apply **live** (written to `~/.config/sysstickers/settings.json`; the running
@@ -96,6 +97,31 @@ python3 lyrics_tray.py --toggle   # switch
   fetched once per track and cached in `~/.cache/sysstickers/lyrics/`
 - The on/off state is remembered and respected by autostart
 - Requires Ubuntu's `ubuntu-appindicators` extension (enabled by default)
+
+## Stickers master switch (top bar)
+
+An **eye icon** appears in the top bar (`stickers_switch.py`, independent from the
+stickers and the lyrics plugin):
+
+- **Click the icon** = show / hide every sticker at once (hiding quits the sticker
+  process, saving CPU and memory)
+- **Right-click menu**: "显示桌面贴纸" (checked state) / "贴纸设置…" / "退出顶栏开关"
+- App menu → search "贴纸 开/关" for the same one-click toggle
+- Eye open = stickers shown; eye slashed = hidden
+
+The state is stored in `~/.config/sysstickers/stickers.json` and respected by autostart,
+so stickers stay off after a reboot until you turn them back on.
+
+```bash
+python3 stickers_switch.py --toggle   # toggle
+python3 stickers_switch.py --start    # on (and ensure the top-bar switch is running)
+python3 stickers_switch.py --stop     # off
+python3 stickers_switch.py --status   # running / stopped
+python3 stickers_switch.py --quit     # quit the top-bar switch only
+```
+
+> Right-click → "退出" on any sticker also turns the master switch off.
+> The settings window (`control.py`) has the same "桌面贴纸" switch.
 
 ## Dynamic Island (GNOME Shell extension)
 
